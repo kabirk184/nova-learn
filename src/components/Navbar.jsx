@@ -12,7 +12,8 @@ import {
   CheckCircle2,
   FileText,
   Menu,
-  X
+  X,
+  Trophy
 } from 'lucide-react';
 
 export default function Navbar({ activeTab, setActiveTab, progress, onOpenProfile }) {
@@ -25,7 +26,8 @@ export default function Navbar({ activeTab, setActiveTab, progress, onOpenProfil
     { id: 'prep', label: 'Study Prep', icon: CheckCircle2 },
     { id: 'library', label: 'Taleem Library', icon: FileText },
     { id: 'tutor', label: 'Nova Tutor', icon: Bot, badge: 'AI Mode' },
-    { id: 'cosmos', label: 'Cosmos', icon: Orbit, badge: '3D Space' }
+    { id: 'cosmos', label: 'Cosmos', icon: Orbit, badge: '3D Space' },
+    { id: 'leaderboard', label: 'Leaderboard', icon: Trophy }
   ];
 
   const handleNavClick = (id) => {

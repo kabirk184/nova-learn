@@ -19,6 +19,7 @@ import confetti from 'canvas-confetti';
 import { subjectsData } from '../data/subjects';
 import { expandedQuizBank } from '../data/quizBank';
 import { addXp, unlockBadge } from '../utils/storage';
+import { recordValidatedActivity } from '../services/studentService';
 
 export default function QuizArena({ onNavigateBack }) {
   // Setup Options
@@ -131,6 +132,13 @@ export default function QuizArena({ onNavigateBack }) {
     const calculatedXp = Math.round((correctCount / currentQuestions.length) * 120) + 30;
     setEarnedXp(calculatedXp);
     addXp(calculatedXp);
+
+    // Sync validated activity with backend leaderboard
+    recordValidatedActivity({
+      activityType: 'quiz_complete',
+      activityId: `${selectedSubjectId}_${Date.now()}`,
+      metadata: { score: correctCount, total: currentQuestions.length }
+    }).catch(err => console.warn('Leaderboard sync notice:', err.message));
 
     if (correctCount === currentQuestions.length) {
       unlockBadge({

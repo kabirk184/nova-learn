@@ -124,6 +124,8 @@ export const unlockBadge = (badge) => {
   return true;
 };
 
+import { recordValidatedActivity } from '../services/studentService';
+
 export const completeDailyChallenge = (challengeId) => {
   const current = getProgress();
   let gainedXp = 0;
@@ -145,6 +147,14 @@ export const completeDailyChallenge = (challengeId) => {
       dailyQuests: updatedQuests
     };
     saveProgress(updated);
+
+    // Sync validated activity with backend leaderboard
+    recordValidatedActivity({
+      activityType: 'daily_challenge',
+      activityId: challengeId,
+      metadata: { gainedXp }
+    }).catch(err => console.warn('Challenge sync notice:', err.message));
+
     return { success: true, xp: gainedXp };
   }
   return { success: false, xp: 0 };

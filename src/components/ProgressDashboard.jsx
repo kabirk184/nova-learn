@@ -295,7 +295,27 @@ export default function ProgressDashboard({ progress, onNavigateBack, onLaunchAr
                   <Trophy size={20} color="var(--accent-gold)" />
                   <span>University Class Leaderboard</span>
                 </h3>
-                <span className="badge-pill badge-cyan" style={{ fontSize: '0.7rem' }}>Live Standings</span>
+                {onNavigateTab ? (
+                  <button
+                    onClick={() => onNavigateTab('leaderboard')}
+                    style={{
+                      background: 'transparent',
+                      border: 'none',
+                      color: 'var(--accent-cyan)',
+                      fontSize: '0.8rem',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px'
+                    }}
+                  >
+                    <span>Full Leaderboard</span>
+                    <ArrowRight size={14} />
+                  </button>
+                ) : (
+                  <span className="badge-pill badge-cyan" style={{ fontSize: '0.7rem' }}>Live Standings</span>
+                )}
               </div>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>

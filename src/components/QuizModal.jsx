@@ -10,6 +10,7 @@ import {
   Sparkles 
 } from 'lucide-react';
 import { addXp, unlockBadge } from '../utils/storage';
+import { recordValidatedActivity } from '../services/studentService';
 
 export default function QuizModal({ quiz, subjectName, onClose, onComplete }) {
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -42,6 +43,13 @@ export default function QuizModal({ quiz, subjectName, onClose, onComplete }) {
       setQuizFinished(true);
       const earnedXp = Math.round((score / totalQ) * 100) + 25;
       addXp(earnedXp);
+
+      // Record in backend student database
+      recordValidatedActivity({
+        activityType: 'quiz_complete',
+        activityId: `module_quiz_${subjectName}_${Date.now()}`,
+        metadata: { score, total: totalQ, subjectName }
+      }).catch(err => console.warn('Quiz modal activity record notice:', err.message));
 
       // Trigger celebration confetti
       try {

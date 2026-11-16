@@ -31,6 +31,9 @@ import StudyPrep from './components/StudyPrep';
 import TaleemLibrary from './components/TaleemLibrary';
 import TutorWorkspace from './components/TutorWorkspace';
 import ProgressDashboard from './components/ProgressDashboard';
+import GlobalLeaderboard from './components/GlobalLeaderboard';
+import StudentOnboardingModal from './components/StudentOnboardingModal';
+import { getStoredStudent, recordValidatedActivity } from './services/studentService';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('home'); // Default to main hub!
@@ -42,6 +45,16 @@ export default function App() {
   const [showProfile, setShowProfile] = useState(false);
   const [langPreference, setLangPreference] = useState('bilingual'); // 'en' | 'urdu' | 'bilingual'
   const [tutorInquiry, setTutorInquiry] = useState(null);
+
+  // Student onboarding state
+  const [showOnboarding, setShowOnboarding] = useState(false);
+
+  useEffect(() => {
+    const student = getStoredStudent();
+    if (!student || !student.isRegistered) {
+      setShowOnboarding(true);
+    }
+  }, []);
 
   // Sync progress updates
   useEffect(() => {
@@ -111,13 +124,22 @@ export default function App() {
       description: 'Cinematic universe portal, interactive 3D Solar System simulation, celestial raycasting, and NASA science insights.'
     },
     {
-      id: 'progress',
-      title: 'My Progress & Achievements',
-      badge: 'XP & Badges',
+      id: 'leaderboard',
+      title: 'Global Student Leaderboard',
+      badge: 'Live Rankings',
       badgeColor: 'badge-gold',
       icon: Trophy,
       iconBg: 'linear-gradient(135deg, #eab308, #ca8a04)',
-      description: 'Track your XP level progression, unlocked achievement badges, study streaks, and simulated class leaderboard.'
+      description: 'See live campus rankings across Daily, Weekly, and All-Time standings with podium honors and XP tracking.'
+    },
+    {
+      id: 'progress',
+      title: 'My Progress & Achievements',
+      badge: 'XP & Badges',
+      badgeColor: 'badge-purple',
+      icon: Award,
+      iconBg: 'linear-gradient(135deg, #8b5cf6, #3b82f6)',
+      description: 'Track your XP level progression, unlocked achievement badges, study streaks, and personal milestones.'
     },
     {
       id: 'challenges',
@@ -458,9 +480,9 @@ export default function App() {
             </div>
 
             {/* Active Subject Main Study Workspace */}
-            <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: '24px' }}>
+            <div className="subject-workspace-grid">
               {/* Left Modules List */}
-              <div className="glass-panel" style={{ padding: '20px', height: 'fit-content', position: 'sticky', top: '90px' }}>
+              <div className="glass-panel subject-modules-sidebar" style={{ padding: '20px', height: 'fit-content' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
                   <h3 style={{ fontSize: '1.05rem', fontWeight: 700 }}>Chapter Outline</h3>
                   <span className="badge-pill badge-purple" style={{ fontSize: '0.7rem' }}>
@@ -653,9 +675,21 @@ export default function App() {
                       </div>
 
                       <button
-                        onClick={() => {
+                        onClick={async () => {
                           addXp(25);
-                          alert('Lesson marked complete! You earned +25 XP!');
+                          try {
+                            const res = await recordValidatedActivity({
+                              activityType: 'lesson_complete',
+                              activityId: activeModule.id
+                            });
+                            if (res.alreadyCompleted) {
+                              alert('Lesson completed! (Already recorded in leaderboard history for XP).');
+                            } else {
+                              alert('🎉 Lesson marked complete! You earned +25 XP in the global leaderboard!');
+                            }
+                          } catch (e) {
+                            alert('Lesson marked complete! You earned +25 XP!');
+                          }
                         }}
                         className="btn-primary"
                       >
@@ -720,6 +754,18 @@ export default function App() {
             progress={progress}
             onNavigateBack={() => setActiveTab('home')}
             onLaunchArena={() => setActiveTab('arena')}
+            onNavigateTab={(tab) => setActiveTab(tab)}
+          />
+        )}
+
+        {/* =========================================================
+            TAB 9: GLOBAL STUDENT LEADERBOARD
+            ========================================================= */}
+        {activeTab === 'leaderboard' && (
+          <GlobalLeaderboard
+            onNavigateBack={() => setActiveTab('home')}
+            onLaunchArena={() => setActiveTab('arena')}
+            onOpenProfile={() => setShowProfile(true)}
           />
         )}
       </main>
@@ -741,8 +787,22 @@ export default function App() {
         <ProfileModal
           progress={progress}
           onClose={() => setShowProfile(false)}
+          onNavigateToLeaderboard={() => {
+            setShowProfile(false);
+            setActiveTab('leaderboard');
+          }}
         />
       )}
+
+      {/* Student Onboarding Modal */}
+      <StudentOnboardingModal
+        isOpen={showOnboarding}
+        onComplete={(student) => {
+          setShowOnboarding(false);
+          setProgress(getProgress());
+        }}
+        defaultName={progress?.name || ''}
+      />
 
       {/* Footer */}
       <footer style={{
