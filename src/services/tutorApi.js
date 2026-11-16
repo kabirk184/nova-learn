@@ -6,6 +6,20 @@
 const API_BASE_URL = import.meta.env.VITE_API_URL || 
   (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') ? 'http://localhost:3001' : '');
 
+function getStudentSessionId() {
+  if (typeof window === 'undefined') return 'server_session';
+  try {
+    let id = localStorage.getItem('nova_student_session_id');
+    if (!id) {
+      id = 'std_' + Math.random().toString(36).substring(2, 11) + '_' + Date.now().toString(36);
+      localStorage.setItem('nova_student_session_id', id);
+    }
+    return id;
+  } catch (_) {
+    return 'std_anonymous_' + Math.random().toString(36).substring(2, 8);
+  }
+}
+
 export async function checkTutorStatus() {
   try {
     const res = await fetch(`${API_BASE_URL}/api/tutor/status`);
@@ -23,10 +37,13 @@ export async function checkTutorStatus() {
 }
 
 export async function sendChatMessage({ messages, explanationDepth = 'detailed', currentSubject = null }) {
+  const studentSessionId = getStudentSessionId();
+
   const res = await fetch(`${API_BASE_URL}/api/tutor/chat`, {
     method: 'POST',
     headers: {
-      'Content-Type': 'application/json'
+      'Content-Type': 'application/json',
+      'X-Student-Session-Id': studentSessionId
     },
     body: JSON.stringify({
       messages,

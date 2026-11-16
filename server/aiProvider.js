@@ -1,9 +1,13 @@
 /**
  * Multi-Provider AI Model Router for Nova Learn
- * Primary Provider: Groq Cloud (openai/gpt-oss-120b, secondary in-provider: qwen/qwen3.8-27b)
+ * Primary Provider: Groq Cloud (openai/gpt-oss-120b, secondary: qwen/qwen3.8-27b)
  * Secondary Provider: Google Gemini (gemini-3.8-flash, fallback: gemini-3.5-flash-lite)
- * Quota Protection: Calibrated for 60 students sharing free-tier capacity
+ * Quota Protection & Persistence: Calibrated for 60 students sharing free-tier capacity
+ * Timezone-Aware Resets: Groq resets at Midnight UTC; Gemini resets at Midnight Pacific Time (PT).
  */
+
+import fs from 'fs';
+import path from 'path';
 
 const SYSTEM_PROMPT = `You are the official AI Study Tutor for Nova Learn, a comprehensive university-level educational platform.
 Your purpose is to provide clear, academically rigorous, articulate, and engaging pedagogical explanations to students.
@@ -27,34 +31,101 @@ export const GEMINI_MODEL_PRIMARY = 'gemini-3.8-flash';
 export const GEMINI_MODEL_SECONDARY = 'gemini-3.5-flash-lite';
 
 // Realistic daily ceilings tailored for 60 students with safety buffers:
-// Groq Free Tier: 1,000 RPD, 8,000 TPM, 200,000 TPD. Safe ceiling: 800 reqs/day (20% safety margin).
-export const GROQ_DAILY_CEILING = 800;
-// Gemini Free Tier: 10-15 RPM, ~500-1,000 RPD. Safe ceiling: 500 reqs/day.
-export const GEMINI_DAILY_CEILING = 500;
-// Combined realistic daily ceiling = 1,300 requests/day (~21 questions/day per student for 60 students)
+export const GROQ_DAILY_CEILING = 800; // 20% margin under 1,000 RPD
+export const GEMINI_DAILY_CEILING = 500; // conservative project-specific allocation
 export const COMBINED_DAILY_CEILING = GROQ_DAILY_CEILING + GEMINI_DAILY_CEILING;
 
-function getUtcDateString() {
+// Timezone calculation helpers
+function getUtcDate() {
   return new Date().toISOString().split('T')[0];
 }
 
-// In-memory usage tracker
+function getPacificDate() {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles' }).format(new Date());
+}
+
+// Persistent usage storage setup
+const DATA_DIR = path.resolve(process.cwd(), 'server', 'data');
+const USAGE_FILE = path.join(DATA_DIR, 'usageStats.json');
+
+function ensureDataDir() {
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
+}
+
+function loadPersistedUsage() {
+  try {
+    ensureDataDir();
+    if (fs.existsSync(USAGE_FILE)) {
+      const data = JSON.parse(fs.readFileSync(USAGE_FILE, 'utf8'));
+      return data;
+    }
+  } catch (err) {
+    console.warn('[Usage Storage] Failed to load usage file, initializing fresh stats:', err.message);
+  }
+  return null;
+}
+
+function savePersistedUsage(state) {
+  try {
+    ensureDataDir();
+    fs.writeFileSync(USAGE_FILE, JSON.stringify(state, null, 2), 'utf8');
+  } catch (err) {
+    console.warn('[Usage Storage] Failed to persist usage state:', err.message);
+  }
+}
+
+// Initialize state from file or defaults
+const existingState = loadPersistedUsage();
+
 const dailyTracker = {
-  date: getUtcDateString(),
-  groqRequests: 0,
-  geminiRequests: 0,
-  otherRequests: 0,
-  fallbackEvents: 0
+  groq: {
+    date: existingState?.groq?.date || getUtcDate(),
+    requestsToday: existingState?.groq?.requestsToday || 0,
+    tokensEstimatedToday: existingState?.groq?.tokensEstimatedToday || 0,
+    liveRemainingRequests: existingState?.groq?.liveRemainingRequests || null,
+    liveRemainingTokens: existingState?.groq?.liveRemainingTokens || null
+  },
+  gemini: {
+    date: existingState?.gemini?.date || getPacificDate(),
+    requestsToday: existingState?.gemini?.requestsToday || 0,
+    liveRetryAfter: null
+  },
+  fallbackEventsToday: existingState?.fallbackEventsToday || 0
 };
 
-function ensureDateRollover() {
-  const today = getUtcDateString();
-  if (dailyTracker.date !== today) {
-    dailyTracker.date = today;
-    dailyTracker.groqRequests = 0;
-    dailyTracker.geminiRequests = 0;
-    dailyTracker.otherRequests = 0;
-    dailyTracker.fallbackEvents = 0;
+// Ensure state is written to disk immediately on boot
+if (!existingState) {
+  savePersistedUsage(dailyTracker);
+}
+
+function ensureDateRollovers() {
+  const currentUtc = getUtcDate();
+  const currentPacific = getPacificDate();
+  let changed = false;
+
+  // Groq resets daily at 00:00 UTC
+  if (dailyTracker.groq.date !== currentUtc) {
+    dailyTracker.groq.date = currentUtc;
+    dailyTracker.groq.requestsToday = 0;
+    dailyTracker.groq.tokensEstimatedToday = 0;
+    dailyTracker.groq.liveRemainingRequests = null;
+    dailyTracker.groq.liveRemainingTokens = null;
+    dailyTracker.fallbackEventsToday = 0;
+    changed = true;
+  }
+
+  // Gemini resets daily at Midnight Pacific Time (PT)
+  if (dailyTracker.gemini.date !== currentPacific) {
+    dailyTracker.gemini.date = currentPacific;
+    dailyTracker.gemini.requestsToday = 0;
+    dailyTracker.gemini.liveRetryAfter = null;
+    changed = true;
+  }
+
+  if (changed) {
+    savePersistedUsage(dailyTracker);
   }
 }
 
@@ -62,7 +133,7 @@ function ensureDateRollover() {
  * Returns current usage statistics and configured provider states
  */
 export function getDailyStats() {
-  ensureDateRollover();
+  ensureDateRollovers();
   const hasGroq = Boolean(process.env.GROQ_API_KEY);
   const hasGemini = Boolean(process.env.GEMINI_API_KEY);
 
@@ -74,45 +145,47 @@ export function getDailyStats() {
     if (hasGemini) secondary = `Google Gemini (${GEMINI_MODEL_PRIMARY})`;
   } else if (hasGemini) {
     primary = `Google Gemini (${GEMINI_MODEL_PRIMARY})`;
-  } else if (process.env.OPENAI_API_KEY) {
-    primary = 'OpenAI (gpt-4o-mini)';
   }
 
-  const totalUsed = dailyTracker.groqRequests + dailyTracker.geminiRequests + dailyTracker.otherRequests;
+  const totalUsed = dailyTracker.groq.requestsToday + dailyTracker.gemini.requestsToday;
   const activeCeiling = (hasGroq ? GROQ_DAILY_CEILING : 0) + (hasGemini ? GEMINI_DAILY_CEILING : 0);
 
   return {
     primaryProvider: primary,
     secondaryProvider: secondary,
     fallbackConfigured: Boolean(hasGroq && hasGemini),
-    date: dailyTracker.date,
+    timezones: {
+      groqResetTimezone: '00:00 UTC',
+      geminiResetTimezone: 'Midnight Pacific Time (PT)',
+      currentUtcDate: dailyTracker.groq.date,
+      currentPacificDate: dailyTracker.gemini.date
+    },
     usage: {
       totalRequestsToday: totalUsed,
-      groqRequestsToday: dailyTracker.groqRequests,
-      geminiRequestsToday: dailyTracker.geminiRequests,
-      fallbackTriggeredToday: dailyTracker.fallbackEvents,
+      groqRequestsToday: dailyTracker.groq.requestsToday,
+      geminiRequestsToday: dailyTracker.gemini.requestsToday,
+      fallbackTriggeredToday: dailyTracker.fallbackEventsToday,
       groqDailyCeiling: GROQ_DAILY_CEILING,
       geminiDailyCeiling: GEMINI_DAILY_CEILING,
       combinedDailyCeiling: activeCeiling || 800,
-      estimatedQueriesPerStudentRemaining: Math.max(0, Math.floor((activeCeiling - totalUsed) / 60))
+      estimatedQueriesPerStudentRemaining: Math.max(0, Math.floor((activeCeiling - totalUsed) / 60)),
+      groqHeaderRemainingRequests: dailyTracker.groq.liveRemainingRequests,
+      groqHeaderRemainingTokens: dailyTracker.groq.liveRemainingTokens
     }
   };
 }
 
 /**
  * Primary AI Router with automatic, bounded fallback from Groq to Gemini
- * Enforces zero-paid-billing and safe single-retry fallback bounds
+ * Strictly protects against ever calling paid APIs or enabling automatic billing
  */
 export async function callAIModel({ messages, explanationDepth = 'detailed', relevantLessons = [], currentSubject = null }) {
-  ensureDateRollover();
+  ensureDateRollovers();
 
   const hasGroq = Boolean(process.env.GROQ_API_KEY);
   const hasGemini = Boolean(process.env.GEMINI_API_KEY);
-  const hasOpenAI = Boolean(process.env.OPENAI_API_KEY);
-  const hasAnthropic = Boolean(process.env.ANTHROPIC_API_KEY);
-  const hasOpenRouter = Boolean(process.env.OPENROUTER_API_KEY);
 
-  if (!hasGroq && !hasGemini && !hasOpenAI && !hasAnthropic && !hasOpenRouter) {
+  if (!hasGroq && !hasGemini) {
     throw new Error('CONFIG_REQUIRED: No AI API key is configured. Please add GROQ_API_KEY or GEMINI_API_KEY in your hosting environment variables.');
   }
 
@@ -140,18 +213,21 @@ export async function callAIModel({ messages, explanationDepth = 'detailed', rel
   let groqError = null;
 
   // 1. Try Groq Cloud first (Preferred primary free provider)
-  if (hasGroq && dailyTracker.groqRequests < GROQ_DAILY_CEILING) {
+  if (hasGroq && dailyTracker.groq.requestsToday < GROQ_DAILY_CEILING) {
     try {
-      // Primary model: openai/gpt-oss-120b
-      const responseText = await callOpenAICompatible(
+      const responseData = await callOpenAICompatible(
         'https://api.groq.com/openai/v1/chat/completions',
         process.env.GROQ_API_KEY,
         GROQ_MODEL_PRIMARY,
         formattedMessages
       );
-      dailyTracker.groqRequests++;
+      
+      dailyTracker.groq.requestsToday++;
+      dailyTracker.groq.tokensEstimatedToday += (responseData.totalTokens || 350);
+      savePersistedUsage(dailyTracker);
+
       return {
-        text: responseText,
+        text: responseData.text,
         provider: `Groq Cloud (${GROQ_MODEL_PRIMARY})`,
         usedFallback: false
       };
@@ -159,7 +235,6 @@ export async function callAIModel({ messages, explanationDepth = 'detailed', rel
       groqError = err;
       console.warn(`[AI Router] Groq primary (${GROQ_MODEL_PRIMARY}) failed: ${err.message}. Trying secondary Groq model (${GROQ_MODEL_SECONDARY})...`);
       
-      // Try in-provider secondary model (qwen/qwen3.8-27b) before switching provider
       try {
         const altResponse = await callOpenAICompatible(
           'https://api.groq.com/openai/v1/chat/completions',
@@ -167,27 +242,34 @@ export async function callAIModel({ messages, explanationDepth = 'detailed', rel
           GROQ_MODEL_SECONDARY,
           formattedMessages
         );
-        dailyTracker.groqRequests++;
+        dailyTracker.groq.requestsToday++;
+        dailyTracker.groq.tokensEstimatedToday += (altResponse.totalTokens || 350);
+        savePersistedUsage(dailyTracker);
+
         return {
-          text: altResponse,
+          text: altResponse.text,
           provider: `Groq Cloud (${GROQ_MODEL_SECONDARY})`,
           usedFallback: false
         };
       } catch (altErr) {
         console.warn(`[AI Router] Groq secondary (${GROQ_MODEL_SECONDARY}) also failed: ${altErr.message}. Attempting Gemini fallback...`);
-        dailyTracker.fallbackEvents++;
+        dailyTracker.fallbackEventsToday++;
+        savePersistedUsage(dailyTracker);
       }
     }
-  } else if (hasGroq && dailyTracker.groqRequests >= GROQ_DAILY_CEILING) {
-    console.warn(`[AI Router] Groq daily ceiling (${GROQ_DAILY_CEILING}) reached today. Switching to Gemini fallback...`);
-    dailyTracker.fallbackEvents++;
+  } else if (hasGroq && dailyTracker.groq.requestsToday >= GROQ_DAILY_CEILING) {
+    console.warn(`[AI Router] Groq daily ceiling (${GROQ_DAILY_CEILING}) reached for today (UTC). Switching to Gemini fallback...`);
+    dailyTracker.fallbackEventsToday++;
+    savePersistedUsage(dailyTracker);
   }
 
   // 2. Secondary Fallback: Google Gemini
-  if (hasGemini && dailyTracker.geminiRequests < GEMINI_DAILY_CEILING) {
+  if (hasGemini && dailyTracker.gemini.requestsToday < GEMINI_DAILY_CEILING) {
     try {
       const responseText = await callGemini(process.env.GEMINI_API_KEY, formattedMessages, GEMINI_MODEL_PRIMARY);
-      dailyTracker.geminiRequests++;
+      dailyTracker.gemini.requestsToday++;
+      savePersistedUsage(dailyTracker);
+
       return {
         text: responseText,
         provider: hasGroq ? `Google Gemini (${GEMINI_MODEL_PRIMARY}) [Auto-Fallback]` : `Google Gemini (${GEMINI_MODEL_PRIMARY})`,
@@ -197,7 +279,9 @@ export async function callAIModel({ messages, explanationDepth = 'detailed', rel
       console.warn(`[AI Router] Gemini primary (${GEMINI_MODEL_PRIMARY}) failed: ${geminiErr.message}. Trying Gemini Lite (${GEMINI_MODEL_SECONDARY})...`);
       try {
         const altGeminiText = await callGemini(process.env.GEMINI_API_KEY, formattedMessages, GEMINI_MODEL_SECONDARY);
-        dailyTracker.geminiRequests++;
+        dailyTracker.gemini.requestsToday++;
+        savePersistedUsage(dailyTracker);
+
         return {
           text: altGeminiText,
           provider: `Google Gemini (${GEMINI_MODEL_SECONDARY}) [Auto-Fallback]`,
@@ -206,13 +290,13 @@ export async function callAIModel({ messages, explanationDepth = 'detailed', rel
       } catch (geminiLiteErr) {
         console.error(`[AI Router] Gemini fallback failed: ${geminiLiteErr.message}`);
         if (groqError) {
-          throw new Error(`QUOTA_EXHAUSTED: Both Groq and Gemini free quotas are temporarily busy or exhausted. The 60-student daily quota resets at 00:00 UTC.`);
+          throw new Error(`QUOTA_EXHAUSTED: Both Groq (UTC) and Gemini (PT) free quotas are temporarily busy or exhausted. Quotas reset at 00:00 UTC and Midnight PT.`);
         }
         throw geminiLiteErr;
       }
     }
-  } else if (hasGemini && dailyTracker.geminiRequests >= GEMINI_DAILY_CEILING) {
-    throw new Error(`QUOTA_EXHAUSTED: Daily free student quota (${GEMINI_DAILY_CEILING} requests) for Gemini has been completed for today. It will reset at 00:00 UTC.`);
+  } else if (hasGemini && dailyTracker.gemini.requestsToday >= GEMINI_DAILY_CEILING) {
+    throw new Error(`QUOTA_EXHAUSTED: Daily free student quota (${GEMINI_DAILY_CEILING} requests) for Gemini has been completed for today. It resets at Midnight Pacific Time.`);
   }
 
   // If Groq failed and Gemini is not configured
@@ -223,26 +307,8 @@ export async function callAIModel({ messages, explanationDepth = 'detailed', rel
     throw groqError;
   }
 
-  // 3. Optional third-party providers (OpenAI / OpenRouter / Anthropic)
-  if (hasOpenAI) {
-    const text = await callOpenAICompatible('https://api.openai.com/v1/chat/completions', process.env.OPENAI_API_KEY, 'gpt-4o-mini', formattedMessages);
-    dailyTracker.otherRequests++;
-    return { text, provider: 'OpenAI (gpt-4o-mini)', usedFallback: true };
-  }
-
-  if (hasOpenRouter) {
-    const text = await callOpenAICompatible('https://openrouter.ai/api/v1/chat/completions', process.env.OPENROUTER_API_KEY, 'meta-llama/llama-3.3-70b-instruct', formattedMessages);
-    dailyTracker.otherRequests++;
-    return { text, provider: 'OpenRouter (Llama-3.3-70B)', usedFallback: true };
-  }
-
-  if (hasAnthropic) {
-    const text = await callAnthropic(process.env.ANTHROPIC_API_KEY, formattedMessages);
-    dailyTracker.otherRequests++;
-    return { text, provider: 'Anthropic Claude', usedFallback: true };
-  }
-
-  throw new Error('QUOTA_EXHAUSTED: All configured free AI quotas for the 60-student community have been utilized for today. Limits reset at 00:00 UTC.');
+  // Strictly refuse to silently call paid APIs
+  throw new Error('QUOTA_EXHAUSTED: All configured free AI quotas for the 60-student community have been utilized for today. Resets occur at 00:00 UTC (Groq) and Midnight PT (Gemini).');
 }
 
 async function callGemini(apiKey, messages, modelName = GEMINI_MODEL_PRIMARY) {
@@ -313,6 +379,16 @@ async function callOpenAICompatible(endpoint, apiKey, model, messages) {
     })
   });
 
+  // Extract live rate limit headers from Groq
+  const headerRemainingReqs = response.headers.get('x-ratelimit-remaining-requests');
+  const headerRemainingTokens = response.headers.get('x-ratelimit-remaining-tokens');
+  if (headerRemainingReqs !== null) {
+    dailyTracker.groq.liveRemainingRequests = parseInt(headerRemainingReqs, 10);
+  }
+  if (headerRemainingTokens !== null) {
+    dailyTracker.groq.liveRemainingTokens = parseInt(headerRemainingTokens, 10);
+  }
+
   if (!response.ok) {
     const errorBody = await response.text();
     let errJson = null;
@@ -331,37 +407,8 @@ async function callOpenAICompatible(endpoint, apiKey, model, messages) {
     throw new Error('Empty response received from AI model.');
   }
 
-  return text;
-}
-
-async function callAnthropic(apiKey, messages) {
-  const systemMsg = messages.find(m => m.role === 'system');
-  const convo = messages.filter(m => m.role !== 'system');
-
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01'
-    },
-    body: JSON.stringify({
-      model: 'claude-3-5-haiku-latest',
-      max_tokens: 2048,
-      system: systemMsg?.content || '',
-      messages: convo.map(m => ({ role: m.role, content: m.content }))
-    })
-  });
-
-  if (!response.ok) {
-    const errText = await response.text();
-    if (response.status === 429) {
-      throw new Error(`QUOTA_EXHAUSTED: Anthropic rate limit reached`);
-    }
-    throw new Error(`Anthropic API Error (${response.status}): ${errText}`);
-  }
-
-  const data = await response.json();
-  const text = data.content?.[0]?.text || '';
-  return text;
+  return {
+    text,
+    totalTokens: data.usage?.total_tokens || 350
+  };
 }

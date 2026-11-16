@@ -31,31 +31,37 @@ loadEnv();
 const PORT = process.env.PORT || 3001;
 
 // ==============================================================================
-// RATE LIMITING & SECURITY CONFIGURATION (Designed for 60 Students)
+// RATE LIMITING & SECURITY CONFIGURATION (School Wi-Fi & 60 Students Aware)
 // ==============================================================================
-// Limits per individual student IP to prevent single-user quota draining
-const IP_RATE_LIMIT_WINDOW_MS = 60 * 1000; // 1 minute window
-const MAX_REQUESTS_PER_IP_PER_MINUTE = 10;  // Up to 10 questions/min per student
-const MAX_REQUESTS_PER_IP_PER_HOUR = 45;    // Up to 45 questions/hour per student
+// Per-student limits (keyed by studentSessionId so students sharing school Wi-Fi aren't blocked)
+const STUDENT_RATE_LIMIT_WINDOW_MS = 60 * 1000;
+const MAX_REQUESTS_PER_STUDENT_PER_MINUTE = 10;
+const MAX_REQUESTS_PER_STUDENT_PER_HOUR = 45;
 
-// Global burst limiter across all 60 students to protect Groq's 30 RPM limit
+// Shared IP / Campus Wi-Fi network burst ceiling (protects Groq's 30 RPM limit)
+const MAX_SHARED_IP_REQUESTS_PER_MINUTE = 28;
+
+// Global throughput limiter across all 60 students
 const GLOBAL_RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const MAX_GLOBAL_REQUESTS_PER_MINUTE = 28;
 
 // In-memory request tracking
+const studentRequestHistory = new Map();
 const ipRequestHistory = new Map();
 const globalRequestTimestamps = [];
 
 // Periodic cleanup of stale rate-limit records every 5 minutes
 setInterval(() => {
   const now = Date.now();
+  for (const [key, history] of studentRequestHistory.entries()) {
+    const valid = history.filter(ts => now - ts < 60 * 60 * 1000);
+    if (valid.length === 0) studentRequestHistory.delete(key);
+    else studentRequestHistory.set(key, valid);
+  }
   for (const [ip, history] of ipRequestHistory.entries()) {
-    const validTimestamps = history.filter(ts => now - ts < 60 * 60 * 1000);
-    if (validTimestamps.length === 0) {
-      ipRequestHistory.delete(ip);
-    } else {
-      ipRequestHistory.set(ip, validTimestamps);
-    }
+    const valid = history.filter(ts => now - ts < 60 * 1000);
+    if (valid.length === 0) ipRequestHistory.delete(ip);
+    else ipRequestHistory.set(ip, valid);
   }
   while (globalRequestTimestamps.length > 0 && now - globalRequestTimestamps[0] > GLOBAL_RATE_LIMIT_WINDOW_MS) {
     globalRequestTimestamps.shift();
@@ -74,9 +80,9 @@ function getClientIp(req) {
 }
 
 /**
- * Checks and records rate limits for a given client IP
+ * Checks and records rate limits considering both student session and shared campus IP
  */
-function checkRateLimits(clientIp) {
+function checkRateLimits(clientIp, studentSessionId) {
   const now = Date.now();
 
   // 1. Global throughput check
@@ -88,38 +94,55 @@ function checkRateLimits(clientIp) {
     const retryAfter = Math.max(1, Math.ceil((oldest + GLOBAL_RATE_LIMIT_WINDOW_MS - now) / 1000));
     return {
       allowed: false,
-      reason: 'The AI Study Tutor is currently handling a burst of questions from fellow students. Please wait a few seconds and submit again.',
+      reason: 'The AI Study Tutor is currently processing concurrent questions from multiple students. Please wait a few seconds and try again.',
       retryAfter
     };
   }
 
-  // 2. Per-IP checks
-  let history = ipRequestHistory.get(clientIp) || [];
-  history = history.filter(ts => now - ts < 60 * 60 * 1000);
-
-  const recentInMinute = history.filter(ts => now - ts < IP_RATE_LIMIT_WINDOW_MS);
-  if (recentInMinute.length >= MAX_REQUESTS_PER_IP_PER_MINUTE) {
-    const oldestInMinute = recentInMinute[0];
-    const retryAfter = Math.max(1, Math.ceil((oldestInMinute + IP_RATE_LIMIT_WINDOW_MS - now) / 1000));
+  // 2. Shared Network / School Wi-Fi Protection
+  let ipHistory = ipRequestHistory.get(clientIp) || [];
+  ipHistory = ipHistory.filter(ts => now - ts < 60 * 1000);
+  if (ipHistory.length >= MAX_SHARED_IP_REQUESTS_PER_MINUTE) {
+    const oldestInMin = ipHistory[0];
+    const retryAfter = Math.max(1, Math.ceil((oldestInMin + 60 * 1000 - now) / 1000));
     return {
       allowed: false,
-      reason: `You have submitted several questions recently (${recentInMinute.length} in 1 min). To ensure fair server access for all 60 students, please pause for ${retryAfter} seconds.`,
+      reason: 'The shared school network has hit the rapid-burst limit. Please pause for a few seconds before your next question.',
       retryAfter
     };
   }
 
-  if (history.length >= MAX_REQUESTS_PER_IP_PER_HOUR) {
-    const oldestInHour = history[0];
+  // 3. Individual Student Checks (Preserves fairness on shared Wi-Fi)
+  const studentKey = studentSessionId || `fallback_ip_${clientIp}`;
+  let studentHistory = studentRequestHistory.get(studentKey) || [];
+  studentHistory = studentHistory.filter(ts => now - ts < 60 * 60 * 1000);
+
+  const studentRecentMinute = studentHistory.filter(ts => now - ts < STUDENT_RATE_LIMIT_WINDOW_MS);
+  if (studentRecentMinute.length >= MAX_REQUESTS_PER_STUDENT_PER_MINUTE) {
+    const oldestInMin = studentRecentMinute[0];
+    const retryAfter = Math.max(1, Math.ceil((oldestInMin + STUDENT_RATE_LIMIT_WINDOW_MS - now) / 1000));
+    return {
+      allowed: false,
+      reason: `You have submitted several questions recently (${studentRecentMinute.length} in 1 min). Please pause for ${retryAfter} seconds to let other students ask.`,
+      retryAfter
+    };
+  }
+
+  if (studentHistory.length >= MAX_REQUESTS_PER_STUDENT_PER_HOUR) {
+    const oldestInHour = studentHistory[0];
     const retryAfter = Math.max(1, Math.ceil((oldestInHour + 60 * 60 * 1000 - now) / 1000));
     return {
       allowed: false,
-      reason: 'Hourly question limit reached for this session (45 questions/hour). Please take a brief study break before asking more questions.',
+      reason: 'Hourly question limit reached for your session (45 questions/hour). Please take a brief study break before asking more.',
       retryAfter
     };
   }
 
-  history.push(now);
-  ipRequestHistory.set(clientIp, history);
+  // Record hit
+  studentHistory.push(now);
+  studentRequestHistory.set(studentKey, studentHistory);
+  ipHistory.push(now);
+  ipRequestHistory.set(clientIp, ipHistory);
   globalRequestTimestamps.push(now);
 
   return { allowed: true };
@@ -128,7 +151,7 @@ function checkRateLimits(clientIp) {
 function setSecurityHeaders(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Student-Session-Id');
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
 }
@@ -157,11 +180,13 @@ const server = http.createServer(async (req, res) => {
       primaryProvider: stats.primaryProvider,
       secondaryProvider: stats.secondaryProvider,
       fallbackConfigured: stats.fallbackConfigured,
-      audienceTarget: '60 students max',
+      audienceTarget: '60 students max (School Wi-Fi friendly)',
+      timezones: stats.timezones,
       dailyUsage: stats.usage,
       rateLimits: {
-        maxPerMinute: MAX_REQUESTS_PER_IP_PER_MINUTE,
-        maxPerHour: MAX_REQUESTS_PER_IP_PER_HOUR
+        maxPerStudentPerMinute: MAX_REQUESTS_PER_STUDENT_PER_MINUTE,
+        maxPerStudentPerHour: MAX_REQUESTS_PER_STUDENT_PER_HOUR,
+        maxSharedNetworkBurstPerMinute: MAX_SHARED_IP_REQUESTS_PER_MINUTE
       }
     }));
     return;
@@ -170,9 +195,10 @@ const server = http.createServer(async (req, res) => {
   // AI Chat Request Endpoint
   if (url.pathname === '/api/tutor/chat' && req.method === 'POST') {
     const clientIp = getClientIp(req);
+    const studentSessionId = req.headers['x-student-session-id'] || null;
 
-    // 1. Verify Rate Limits
-    const limitCheck = checkRateLimits(clientIp);
+    // 1. Verify Rate Limits (School Wi-Fi friendly)
+    const limitCheck = checkRateLimits(clientIp, studentSessionId);
     if (!limitCheck.allowed) {
       res.writeHead(429, { 
         'Content-Type': 'application/json',
@@ -293,10 +319,10 @@ const server = http.createServer(async (req, res) => {
 
         if (isConfigRequired) {
           statusCode = 503;
-          userFacingError = 'AI Service Not Configured: No AI provider key is configured on the backend. Please add GROQ_API_KEY or GEMINI_API_KEY in your hosting environment variables.';
+          userFacingError = 'AI Service Not Configured: No free AI provider key is configured on the backend. Please add GROQ_API_KEY or GEMINI_API_KEY in your hosting environment variables.';
         } else if (isQuotaError) {
           statusCode = 429;
-          userFacingError = 'Demonstration Usage Quota Reached: All free AI quotas for the 60-student community have temporarily been reached. Please pause for 1-2 minutes or check back shortly. Quotas reset at 00:00 UTC.';
+          userFacingError = 'Demonstration Usage Quota Reached: All free AI quotas for the 60-student community have temporarily been reached. Quotas reset at 00:00 UTC (Groq) and Midnight PT (Gemini).';
         }
 
         res.writeHead(statusCode, { 'Content-Type': 'application/json' });

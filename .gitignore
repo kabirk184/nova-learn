@@ -19,6 +19,9 @@ node_modules/
 .pnp
 .pnp.js
 
+# Server Persistent Local Data
+server/data/
+
 # Production Builds
 dist/
 dist-ssr/
