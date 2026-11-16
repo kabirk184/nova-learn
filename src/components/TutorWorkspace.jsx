@@ -92,6 +92,8 @@ export default function TutorWorkspace({ onNavigateBack, initialPrompt = null, i
         sender: 'bot',
         topic: selectedSubject !== 'All Subjects' ? selectedSubject : 'AI Study Tutor',
         content: result.response,
+        provider: result.provider,
+        usedFallback: result.usedFallback,
         relevantLessons: result.relevantLessons || [],
         followUps: result.suggestedFollowUps || []
       };
@@ -187,7 +189,11 @@ export default function TutorWorkspace({ onNavigateBack, initialPrompt = null, i
             fontWeight: 700
           }}>
             <Cpu size={14} />
-            <span>{serverStatus?.hasApiKey ? `Connected: ${serverStatus.provider}` : 'API Setup Required'}</span>
+            <span>
+              {serverStatus?.hasApiKey 
+                ? `${serverStatus.primaryProvider || serverStatus.provider}${serverStatus.fallbackConfigured ? ' (+Gemini Fallback)' : ''}`
+                : 'API Setup Required'}
+            </span>
           </div>
 
           <button
@@ -266,14 +272,14 @@ export default function TutorWorkspace({ onNavigateBack, initialPrompt = null, i
               borderRadius: 'var(--radius-sm)',
               padding: '14px'
             }}>
-              <span className="badge-pill badge-cyan" style={{ marginBottom: '8px' }}>Option A: Google Gemini (Recommended)</span>
+              <span className="badge-pill badge-cyan" style={{ marginBottom: '8px' }}>Option A: Groq Cloud (Recommended Primary)</span>
               <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', lineHeight: 1.5, marginBottom: '8px' }}>
-                100% Free tier, ultra-fast latency, and 1 million token context.
+                Ultra-fast Llama-3.3-70B inference on free tier (1,000 requests/day, no credit card required).
               </p>
               <ol style={{ fontSize: '0.8rem', color: '#cbd5e1', paddingLeft: '18px', lineHeight: 1.6 }}>
-                <li>Get a free key from <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" style={{ color: 'var(--accent-cyan)' }}>Google AI Studio</a></li>
-                <li><strong>Local:</strong> Add <code>GEMINI_API_KEY=your_key</code> in <code>.env</code> (ignored by git)</li>
-                <li><strong>Cloud Deployment:</strong> Add in your host's Environment Variables settings</li>
+                <li>Get a free key from <a href="https://console.groq.com/keys" target="_blank" rel="noreferrer" style={{ color: 'var(--accent-cyan)' }}>Groq Console</a></li>
+                <li><strong>Local:</strong> Add <code>GROQ_API_KEY=your_key</code> in <code>.env</code></li>
+                <li><strong>Cloud:</strong> Add in your hosting provider's Environment Variables</li>
               </ol>
             </div>
 
@@ -283,21 +289,21 @@ export default function TutorWorkspace({ onNavigateBack, initialPrompt = null, i
               borderRadius: 'var(--radius-sm)',
               padding: '14px'
             }}>
-              <span className="badge-pill badge-purple" style={{ marginBottom: '8px' }}>Option B: OpenAI / Groq</span>
+              <span className="badge-pill badge-purple" style={{ marginBottom: '8px' }}>Option B: Google Gemini (Secondary Fallback)</span>
               <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', lineHeight: 1.5, marginBottom: '8px' }}>
-                Supports GPT-4o-mini, Groq Llama-3.3, and Anthropic Claude.
+                Gemini 1.5 Flash (1,500 requests/day free tier). Acts as an instant automatic fallback if Groq is busy.
               </p>
               <ol style={{ fontSize: '0.8rem', color: '#cbd5e1', paddingLeft: '18px', lineHeight: 1.6 }}>
-                <li>Get an API key from OpenAI, Groq, or Anthropic</li>
-                <li><strong>Local:</strong> Add <code>OPENAI_API_KEY=...</code> or <code>GROQ_API_KEY=...</code> in <code>.env</code></li>
-                <li><strong>Cloud:</strong> Set in your hosting provider's private dashboard</li>
+                <li>Get a free key from <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" style={{ color: 'var(--accent-lavender)' }}>Google AI Studio</a></li>
+                <li><strong>Local:</strong> Add <code>GEMINI_API_KEY=your_key</code> in <code>.env</code></li>
+                <li><strong>Dual-Provider:</strong> Adding both provides 2,300+ free queries/day for 60 students</li>
               </ol>
             </div>
           </div>
 
           <div style={{ fontSize: '0.8rem', color: 'var(--text-dim)', borderTop: '1px solid var(--border-subtle)', paddingTop: '10px', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
-            <span>🔒 <strong>Security Notice:</strong> Never commit API keys to public GitHub repositories.</span>
-            <span>⚖️ <strong>Fair Use:</strong> Requests are rate-limited on the server to prevent quota abuse.</span>
+            <span>🔒 <strong>Zero Billing Risk:</strong> Only official free-tier APIs are used. No billing or credit cards are ever required.</span>
+            <span>🎓 <strong>60-Student Capacity:</strong> Sized for ~38 daily inquiries per student with zero downtime.</span>
           </div>
         </div>
       )}
@@ -445,11 +451,25 @@ export default function TutorWorkspace({ onNavigateBack, initialPrompt = null, i
                 position: 'relative'
               }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                  {msg.topic && (
-                    <span className={`badge-pill ${msg.isError ? 'badge-coral' : 'badge-purple'}`} style={{ fontSize: '0.72rem' }}>
-                      {msg.topic}
-                    </span>
-                  )}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                    {msg.topic && (
+                      <span className={`badge-pill ${msg.isError ? 'badge-coral' : 'badge-purple'}`} style={{ fontSize: '0.72rem' }}>
+                        {msg.topic}
+                      </span>
+                    )}
+                    {msg.provider && (
+                      <span style={{
+                        fontSize: '0.68rem',
+                        color: msg.usedFallback ? '#fbbf24' : '#38bdf8',
+                        background: 'rgba(255,255,255,0.06)',
+                        padding: '2px 8px',
+                        borderRadius: '6px',
+                        fontWeight: 600
+                      }}>
+                        {msg.provider}
+                      </span>
+                    )}
+                  </div>
 
                   {msg.sender === 'bot' && (
                     <button

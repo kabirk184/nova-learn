@@ -1,6 +1,8 @@
 /**
- * Multi-Provider AI Model Router
- * Supports Google Gemini, OpenAI, Groq, Anthropic, or OpenRouter
+ * Multi-Provider AI Model Router for Nova Learn
+ * Primary Provider: Groq Cloud (llama-3.3-70b-versatile) - Ultra-fast, free tier
+ * Secondary Fallback: Google Gemini (gemini-1.5-flash) - High TPM, 1,500 RPD free tier
+ * Audience Target: Designed and quota-protected for 60 students
  */
 
 const SYSTEM_PROMPT = `You are the official AI Study Tutor for Nova Learn, a comprehensive university-level educational platform.
@@ -17,18 +19,98 @@ Key Guidelines:
 8. Respond in clear English. If the student asks in Urdu or requests Urdu explanations, respond in eloquent, grammatically correct Urdu.
 9. Never fabricate citations or claim to have accessed the live internet. State facts with scholarly precision.`;
 
-export async function callAIModel({ messages, explanationDepth = 'detailed', relevantLessons = [], currentSubject = null }) {
-  const apiKey = process.env.GEMINI_API_KEY || 
-                 process.env.OPENAI_API_KEY || 
-                 process.env.GROQ_API_KEY || 
-                 process.env.ANTHROPIC_API_KEY || 
-                 process.env.OPENROUTER_API_KEY;
+// Supported production models on Free Tiers
+export const GROQ_MODEL = 'llama-3.3-70b-versatile';
+export const GEMINI_MODEL = 'gemini-1.5-flash';
 
-  if (!apiKey) {
-    throw new Error('CONFIG_REQUIRED: No AI API key has been configured on the server yet. Please add your GEMINI_API_KEY or OPENAI_API_KEY in the hosting environment variables.');
+// Safety quotas designed for 60 students
+// Groq allows 1,000 RPD on free tier; we set safe ceiling at 900
+export const GROQ_DAILY_CEILING = 900;
+// Gemini allows 1,500 RPD on free tier; we set safe ceiling at 1,400
+export const GEMINI_DAILY_CEILING = 1400;
+
+function getUtcDateString() {
+  return new Date().toISOString().split('T')[0];
+}
+
+// In-memory usage tracker
+const dailyTracker = {
+  date: getUtcDateString(),
+  groqRequests: 0,
+  geminiRequests: 0,
+  otherRequests: 0,
+  fallbackEvents: 0
+};
+
+function ensureDateRollover() {
+  const today = getUtcDateString();
+  if (dailyTracker.date !== today) {
+    dailyTracker.date = today;
+    dailyTracker.groqRequests = 0;
+    dailyTracker.geminiRequests = 0;
+    dailyTracker.otherRequests = 0;
+    dailyTracker.fallbackEvents = 0;
+  }
+}
+
+/**
+ * Returns current usage statistics and configured provider states
+ */
+export function getDailyStats() {
+  ensureDateRollover();
+  const hasGroq = Boolean(process.env.GROQ_API_KEY);
+  const hasGemini = Boolean(process.env.GEMINI_API_KEY);
+
+  let primary = null;
+  let secondary = null;
+
+  if (hasGroq) {
+    primary = `Groq Cloud (${GROQ_MODEL})`;
+    if (hasGemini) secondary = `Google Gemini (${GEMINI_MODEL})`;
+  } else if (hasGemini) {
+    primary = `Google Gemini (${GEMINI_MODEL})`;
+  } else if (process.env.OPENAI_API_KEY) {
+    primary = 'OpenAI (gpt-4o-mini)';
   }
 
-  // Build context augmentation from Nova Learn's verified library
+  const totalUsed = dailyTracker.groqRequests + dailyTracker.geminiRequests + dailyTracker.otherRequests;
+  const totalCeiling = (hasGroq ? GROQ_DAILY_CEILING : 0) + (hasGemini ? GEMINI_DAILY_CEILING : 0);
+
+  return {
+    primaryProvider: primary,
+    secondaryProvider: secondary,
+    fallbackConfigured: Boolean(hasGroq && hasGemini),
+    date: dailyTracker.date,
+    usage: {
+      totalRequestsToday: totalUsed,
+      groqRequestsToday: dailyTracker.groqRequests,
+      geminiRequestsToday: dailyTracker.geminiRequests,
+      fallbackTriggeredToday: dailyTracker.fallbackEvents,
+      groqDailyCeiling: GROQ_DAILY_CEILING,
+      geminiDailyCeiling: GEMINI_DAILY_CEILING,
+      combinedDailyCeiling: totalCeiling || 1500,
+      estimatedQueriesPerStudentRemaining: Math.max(0, Math.floor((totalCeiling - totalUsed) / 60))
+    }
+  };
+}
+
+/**
+ * Primary AI Router with automatic, seamless fallback from Groq to Gemini
+ */
+export async function callAIModel({ messages, explanationDepth = 'detailed', relevantLessons = [], currentSubject = null }) {
+  ensureDateRollover();
+
+  const hasGroq = Boolean(process.env.GROQ_API_KEY);
+  const hasGemini = Boolean(process.env.GEMINI_API_KEY);
+  const hasOpenAI = Boolean(process.env.OPENAI_API_KEY);
+  const hasAnthropic = Boolean(process.env.ANTHROPIC_API_KEY);
+  const hasOpenRouter = Boolean(process.env.OPENROUTER_API_KEY);
+
+  if (!hasGroq && !hasGemini && !hasOpenAI && !hasAnthropic && !hasOpenRouter) {
+    throw new Error('CONFIG_REQUIRED: No AI API key is configured. Please add GROQ_API_KEY or GEMINI_API_KEY in your hosting environment variables.');
+  }
+
+  // Build lesson context augmentation
   let contextSnippet = '';
   if (relevantLessons && relevantLessons.length > 0) {
     contextSnippet = `\n\n[Verified Nova Learn Library Context]:\n` + 
@@ -41,7 +123,6 @@ export async function callAIModel({ messages, explanationDepth = 'detailed', rel
     ? '\n\n[Instruction: Provide an intuitive, easy-to-understand explanation with everyday analogies, avoiding overly dense technical jargon unless defined.]'
     : '\n\n[Instruction: Provide a comprehensive, rigorous undergraduate-level explanation with clear conceptual definitions, key theoretical frameworks, examples, and synthesis.]';
 
-  // Format messages
   const formattedMessages = [
     { role: 'system', content: SYSTEM_PROMPT + (currentSubject ? `\nActive Subject Focus: ${currentSubject}` : '') + contextSnippet + depthDirective },
     ...messages.map(m => ({
@@ -50,32 +131,82 @@ export async function callAIModel({ messages, explanationDepth = 'detailed', rel
     }))
   ];
 
-  // 1. Google Gemini (Preferred provider if GEMINI_API_KEY is present)
-  if (process.env.GEMINI_API_KEY) {
-    return await callGemini(process.env.GEMINI_API_KEY, formattedMessages);
+  let groqError = null;
+
+  // 1. Try Groq Cloud first (Preferred primary free provider)
+  if (hasGroq && dailyTracker.groqRequests < GROQ_DAILY_CEILING) {
+    try {
+      const responseText = await callOpenAICompatible(
+        'https://api.groq.com/openai/v1/chat/completions',
+        process.env.GROQ_API_KEY,
+        GROQ_MODEL,
+        formattedMessages
+      );
+      dailyTracker.groqRequests++;
+      return {
+        text: responseText,
+        provider: `Groq Cloud (${GROQ_MODEL})`,
+        usedFallback: false
+      };
+    } catch (err) {
+      groqError = err;
+      console.warn(`[AI Router] Groq primary provider error (${err.message}). Checking Gemini fallback...`);
+      dailyTracker.fallbackEvents++;
+    }
+  } else if (hasGroq && dailyTracker.groqRequests >= GROQ_DAILY_CEILING) {
+    console.warn(`[AI Router] Groq daily ceiling (${GROQ_DAILY_CEILING}) reached today. Switching to Gemini fallback...`);
+    dailyTracker.fallbackEvents++;
   }
 
-  // 2. Groq (Ultra-fast Llama-3 inference)
-  if (process.env.GROQ_API_KEY) {
-    return await callOpenAICompatible('https://api.groq.com/openai/v1/chat/completions', process.env.GROQ_API_KEY, 'llama-3.3-70b-versatile', formattedMessages);
+  // 2. Secondary Fallback: Google Gemini
+  if (hasGemini && dailyTracker.geminiRequests < GEMINI_DAILY_CEILING) {
+    try {
+      const responseText = await callGemini(process.env.GEMINI_API_KEY, formattedMessages);
+      dailyTracker.geminiRequests++;
+      return {
+        text: responseText,
+        provider: hasGroq ? `Google Gemini (${GEMINI_MODEL}) [Auto-Fallback]` : `Google Gemini (${GEMINI_MODEL})`,
+        usedFallback: Boolean(hasGroq)
+      };
+    } catch (geminiErr) {
+      console.error(`[AI Router] Gemini secondary provider error: ${geminiErr.message}`);
+      if (groqError) {
+        throw new Error(`QUOTA_EXHAUSTED: Both Groq and Gemini free quotas are temporarily busy or exhausted. Please wait 1-2 minutes or check back shortly.`);
+      }
+      throw geminiErr;
+    }
+  } else if (hasGemini && dailyTracker.geminiRequests >= GEMINI_DAILY_CEILING) {
+    throw new Error(`QUOTA_EXHAUSTED: Daily free student quota (${GEMINI_DAILY_CEILING} requests) for Gemini has been completed for today. It will reset at 00:00 UTC.`);
   }
 
-  // 3. OpenAI
-  if (process.env.OPENAI_API_KEY) {
-    return await callOpenAICompatible('https://api.openai.com/v1/chat/completions', process.env.OPENAI_API_KEY, 'gpt-4o-mini', formattedMessages);
+  // If Groq was tried but failed and no Gemini fallback is configured
+  if (groqError) {
+    if (groqError.message?.includes('QUOTA_EXHAUSTED') || groqError.message?.includes('rate_limit')) {
+      throw new Error(`QUOTA_EXHAUSTED: Groq free usage limit reached. Configure GEMINI_API_KEY as a secondary provider in .env for automatic zero-downtime fallback.`);
+    }
+    throw groqError;
   }
 
-  // 4. OpenRouter
-  if (process.env.OPENROUTER_API_KEY) {
-    return await callOpenAICompatible('https://openrouter.ai/api/v1/chat/completions', process.env.OPENROUTER_API_KEY, 'meta-llama/llama-3.3-70b-instruct', formattedMessages);
+  // 3. Optional third-party providers (OpenAI / OpenRouter / Anthropic)
+  if (hasOpenAI) {
+    const text = await callOpenAICompatible('https://api.openai.com/v1/chat/completions', process.env.OPENAI_API_KEY, 'gpt-4o-mini', formattedMessages);
+    dailyTracker.otherRequests++;
+    return { text, provider: 'OpenAI (gpt-4o-mini)', usedFallback: true };
   }
 
-  // 5. Anthropic Claude
-  if (process.env.ANTHROPIC_API_KEY) {
-    return await callAnthropic(process.env.ANTHROPIC_API_KEY, formattedMessages);
+  if (hasOpenRouter) {
+    const text = await callOpenAICompatible('https://openrouter.ai/api/v1/chat/completions', process.env.OPENROUTER_API_KEY, 'meta-llama/llama-3.3-70b-instruct', formattedMessages);
+    dailyTracker.otherRequests++;
+    return { text, provider: 'OpenRouter (Llama-3.3-70B)', usedFallback: true };
   }
 
-  throw new Error('Unsupported AI provider configuration.');
+  if (hasAnthropic) {
+    const text = await callAnthropic(process.env.ANTHROPIC_API_KEY, formattedMessages);
+    dailyTracker.otherRequests++;
+    return { text, provider: 'Anthropic Claude', usedFallback: true };
+  }
+
+  throw new Error('QUOTA_EXHAUSTED: All configured AI quotas have been utilized for today. Limits reset at 00:00 UTC.');
 }
 
 async function callGemini(apiKey, messages) {
@@ -87,8 +218,7 @@ async function callGemini(apiKey, messages) {
     parts: [{ text: m.content }]
   }));
 
-  const model = 'gemini-1.5-flash';
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
 
   const payload = {
     contents,
@@ -152,7 +282,7 @@ async function callOpenAICompatible(endpoint, apiKey, model, messages) {
     let errJson = null;
     try { errJson = JSON.parse(errorBody); } catch (_) {}
     const msg = errJson?.error?.message || `API returned status ${response.status}`;
-    if (response.status === 429 || msg.includes('rate_limit') || msg.includes('quota')) {
+    if (response.status === 429 || msg.includes('rate_limit') || msg.includes('quota') || msg.includes('tokens per minute')) {
       throw new Error(`QUOTA_EXHAUSTED: ${msg}`);
     }
     throw new Error(`API Error: ${msg}`);

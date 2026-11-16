@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { findRelevantLessons } from './knowledgeEngine.js';
-import { callAIModel } from './aiProvider.js';
+import { callAIModel, getDailyStats } from './aiProvider.js';
 
 // Load .env variables manually without external dependencies
 function loadEnv() {
@@ -31,16 +31,16 @@ loadEnv();
 const PORT = process.env.PORT || 3001;
 
 // ==============================================================================
-// RATE LIMITING & SECURITY CONFIGURATION
+// RATE LIMITING & SECURITY CONFIGURATION (Designed for 60 Students)
 // ==============================================================================
-// Limits per individual client IP to prevent quota abuse and DoS
+// Limits per individual student IP to prevent single-user quota draining
 const IP_RATE_LIMIT_WINDOW_MS = 60 * 1000; // 1 minute window
 const MAX_REQUESTS_PER_IP_PER_MINUTE = 10;  // Up to 10 questions/min per student
 const MAX_REQUESTS_PER_IP_PER_HOUR = 45;    // Up to 45 questions/hour per student
 
-// Global limiter across all users to protect upstream free API tiers
+// Global burst limiter across all 60 students to protect Groq's 30 RPM limit
 const GLOBAL_RATE_LIMIT_WINDOW_MS = 60 * 1000;
-const MAX_GLOBAL_REQUESTS_PER_MINUTE = 35;
+const MAX_GLOBAL_REQUESTS_PER_MINUTE = 28;
 
 // In-memory request tracking
 const ipRequestHistory = new Map();
@@ -57,7 +57,6 @@ setInterval(() => {
       ipRequestHistory.set(ip, validTimestamps);
     }
   }
-  // Trim global timestamps older than 1 minute
   while (globalRequestTimestamps.length > 0 && now - globalRequestTimestamps[0] > GLOBAL_RATE_LIMIT_WINDOW_MS) {
     globalRequestTimestamps.shift();
   }
@@ -69,7 +68,6 @@ setInterval(() => {
 function getClientIp(req) {
   const forwarded = req.headers['x-forwarded-for'];
   if (forwarded) {
-    // Return first IP in comma-separated list
     return forwarded.split(',')[0].trim();
   }
   return req.headers['x-real-ip'] || req.socket.remoteAddress || '127.0.0.1';
@@ -77,7 +75,6 @@ function getClientIp(req) {
 
 /**
  * Checks and records rate limits for a given client IP
- * Returns { allowed: boolean, reason?: string, retryAfter?: number }
  */
 function checkRateLimits(clientIp) {
   const now = Date.now();
@@ -91,40 +88,36 @@ function checkRateLimits(clientIp) {
     const retryAfter = Math.max(1, Math.ceil((oldest + GLOBAL_RATE_LIMIT_WINDOW_MS - now) / 1000));
     return {
       allowed: false,
-      reason: 'The public AI Study Tutor is currently at high student traffic capacity. Please pause for a few seconds and try again.',
+      reason: 'The AI Study Tutor is currently handling a burst of questions from fellow students. Please wait a few seconds and submit again.',
       retryAfter
     };
   }
 
   // 2. Per-IP checks
   let history = ipRequestHistory.get(clientIp) || [];
-  // Filter history to last 1 hour
   history = history.filter(ts => now - ts < 60 * 60 * 1000);
 
-  // Check 1-minute window
   const recentInMinute = history.filter(ts => now - ts < IP_RATE_LIMIT_WINDOW_MS);
   if (recentInMinute.length >= MAX_REQUESTS_PER_IP_PER_MINUTE) {
     const oldestInMinute = recentInMinute[0];
     const retryAfter = Math.max(1, Math.ceil((oldestInMinute + IP_RATE_LIMIT_WINDOW_MS - now) / 1000));
     return {
       allowed: false,
-      reason: `You have submitted several questions recently (${recentInMinute.length} in 1 min). To ensure fair server access for all students, please wait ${retryAfter} seconds before your next question.`,
+      reason: `You have submitted several questions recently (${recentInMinute.length} in 1 min). To ensure fair server access for all 60 students, please pause for ${retryAfter} seconds.`,
       retryAfter
     };
   }
 
-  // Check 1-hour window
   if (history.length >= MAX_REQUESTS_PER_IP_PER_HOUR) {
     const oldestInHour = history[0];
     const retryAfter = Math.max(1, Math.ceil((oldestInHour + 60 * 60 * 1000 - now) / 1000));
     return {
       allowed: false,
-      reason: 'Hourly question limit reached for this session (45 questions/hour). Please take a short study break or configure your own free Gemini API key.',
+      reason: 'Hourly question limit reached for this session (45 questions/hour). Please take a brief study break before asking more questions.',
       retryAfter
     };
   }
 
-  // Record valid hit
   history.push(now);
   ipRequestHistory.set(clientIp, history);
   globalRequestTimestamps.push(now);
@@ -154,17 +147,18 @@ const server = http.createServer(async (req, res) => {
   // Health and Status Check Endpoint
   if (url.pathname === '/api/tutor/status' && req.method === 'GET') {
     loadEnv();
-    const configuredProvider = process.env.GEMINI_API_KEY ? 'Google Gemini (gemini-1.5-flash)' :
-                               process.env.OPENAI_API_KEY ? 'OpenAI (gpt-4o-mini)' :
-                               process.env.GROQ_API_KEY ? 'Groq (Llama-3.3-70B)' :
-                               process.env.OPENROUTER_API_KEY ? 'OpenRouter' :
-                               process.env.ANTHROPIC_API_KEY ? 'Anthropic Claude' : null;
+    const stats = getDailyStats();
 
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
       status: 'ok',
-      hasApiKey: !!configuredProvider,
-      provider: configuredProvider || 'None configured (Set GEMINI_API_KEY in hosting environment variables)',
+      hasApiKey: !!stats.primaryProvider,
+      provider: stats.primaryProvider || 'None configured (Set GROQ_API_KEY or GEMINI_API_KEY)',
+      primaryProvider: stats.primaryProvider,
+      secondaryProvider: stats.secondaryProvider,
+      fallbackConfigured: stats.fallbackConfigured,
+      audienceTarget: '60 students max',
+      dailyUsage: stats.usage,
       rateLimits: {
         maxPerMinute: MAX_REQUESTS_PER_IP_PER_MINUTE,
         maxPerHour: MAX_REQUESTS_PER_IP_PER_HOUR
@@ -192,7 +186,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // 2. Read and Limit Body Size (Max 64KB to prevent payload flooding)
+    // 2. Read and Limit Body Size (Max 64KB)
     let body = '';
     const MAX_PAYLOAD_BYTES = 64 * 1024;
     let payloadExceeded = false;
@@ -217,7 +211,7 @@ const server = http.createServer(async (req, res) => {
         let parsed;
         try {
           parsed = JSON.parse(body || '{}');
-        } catch (parseErr) {
+        } catch (_) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Invalid JSON request payload.' }));
           return;
@@ -238,7 +232,6 @@ const server = http.createServer(async (req, res) => {
           return;
         }
 
-        // Validate each message structure
         for (const msg of messages) {
           if (!msg || typeof msg.content !== 'string') {
             res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -259,27 +252,27 @@ const server = http.createServer(async (req, res) => {
           return;
         }
 
-        // Sanitize explanationDepth and currentSubject
         const safeDepth = explanationDepth === 'simple' ? 'simple' : 'detailed';
         const safeSubject = typeof currentSubject === 'string' ? currentSubject.slice(0, 80) : null;
 
-        // 4. Find relevant internal Nova Learn lessons to augment context
+        // 4. Augment with internal library context
         const relevantLessons = findRelevantLessons(latestUserMsg, safeSubject, 3);
 
-        // 5. Call the live AI model
-        const aiResponseText = await callAIModel({
+        // 5. Call live model (Groq primary with auto-fallback to Gemini)
+        const aiResult = await callAIModel({
           messages,
           explanationDepth: safeDepth,
           relevantLessons,
           currentSubject: safeSubject
         });
 
-        // Recommended follow-ups
         const suggestedFollowUps = relevantLessons.slice(0, 2).map(l => `Tell me more about ${l.title} in ${l.subject}`);
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
-          response: aiResponseText,
+          response: aiResult.text,
+          provider: aiResult.provider,
+          usedFallback: aiResult.usedFallback,
           relevantLessons: relevantLessons.map(l => ({
             id: l.id,
             title: l.title,
@@ -300,10 +293,10 @@ const server = http.createServer(async (req, res) => {
 
         if (isConfigRequired) {
           statusCode = 503;
-          userFacingError = 'AI Service Not Configured: No AI provider key is configured on the backend. Please add GEMINI_API_KEY in your hosting environment variables.';
+          userFacingError = 'AI Service Not Configured: No AI provider key is configured on the backend. Please add GROQ_API_KEY or GEMINI_API_KEY in your hosting environment variables.';
         } else if (isQuotaError) {
           statusCode = 429;
-          userFacingError = 'Demonstration Usage Quota Reached: The AI provider quota for this public demonstration has temporarily been reached. Please try again in 1-2 minutes or configure your own free Gemini API key.';
+          userFacingError = 'Demonstration Usage Quota Reached: All free AI quotas for the 60-student community have temporarily been reached. Please pause for 1-2 minutes or check back shortly. Quotas reset at 00:00 UTC.';
         }
 
         res.writeHead(statusCode, { 'Content-Type': 'application/json' });
