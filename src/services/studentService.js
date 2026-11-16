@@ -201,3 +201,4 @@ export async function fetchGlobalLeaderboard(period = 'all') {
     };
   }
 }
+

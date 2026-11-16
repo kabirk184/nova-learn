@@ -316,3 +316,4 @@ export default function StudentOnboardingModal({ isOpen, onComplete, defaultName
     </div>
   );
 }
+

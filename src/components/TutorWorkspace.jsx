@@ -98,45 +98,28 @@ export default function TutorWorkspace({ onNavigateBack, initialPrompt = null, i
         followUps: result.suggestedFollowUps || []
       };
 
-      setMessages(prev => [...prev, botReply]);
-      addXp(15); // Reward learning XP
+      setMessages([...updatedMessages, botReply]);
+      addXp(10); // Reward active learning engagement
     } catch (err) {
-      console.error('Chat error:', err);
-      const isMissingConfig = err.isConfigRequired || err.message?.includes('CONFIG_REQUIRED');
-      const isRateLimited = err.isRateLimited || err.message?.includes('Rate limit') || err.message?.includes('traffic capacity');
-      const isQuota = err.isQuotaExhausted || err.message?.includes('quota') || err.message?.includes('Quota Reached');
-      
-      let errorTitle = 'Connection Notice';
-      let errorText = err.message;
+      console.error('Tutor Workspace Error:', err);
+      const friendlyError = err.message || 'Unable to connect to Nova AI Tutor proxy.';
+      setErrorMessage(friendlyError);
 
-      if (isMissingConfig) {
-        errorTitle = 'API Setup Required';
-        errorText = "The AI Tutor requires a free AI API key (such as Google Gemini or OpenAI) configured in your private server environment variables to communicate with the model. Click 'Setup Instructions' above to view the simple 1-minute guide.";
-        setShowConfigModal(true);
-      } else if (isRateLimited) {
-        errorTitle = 'Rate Limit Active';
-        errorText = `⏳ ${err.message}`;
-      } else if (isQuota) {
-        errorTitle = 'Demonstration Quota Reached';
-        errorText = `⚡ ${err.message}`;
-      }
-
-      const errorReply = {
+      const errorBotMessage = {
         sender: 'bot',
-        isError: true,
-        topic: errorTitle,
-        content: errorText
+        topic: 'System Notice',
+        content: `⚠️ ${friendlyError}\n\nTroubleshooting:\n• Ensure the backend server is running (\`node server/index.js\` on port 3001)\n• Verify your free GROQ_API_KEY or GEMINI_API_KEY in \`.env\`\n• If your daily free quota is exhausted, questions will automatically resume upon quota reset.`,
+        isError: true
       };
-
-      setMessages(prev => [...prev, errorReply]);
+      setMessages([...updatedMessages, errorBotMessage]);
     } finally {
       setIsLoading(false);
     }
   };
 
-  const handleCopy = (text, index) => {
+  const handleCopy = (text, idx) => {
     navigator.clipboard.writeText(text);
-    setCopiedIndex(index);
+    setCopiedIndex(idx);
     setTimeout(() => setCopiedIndex(null), 2000);
   };
 
@@ -153,28 +136,43 @@ export default function TutorWorkspace({ onNavigateBack, initialPrompt = null, i
 
   return (
     <div style={{ maxWidth: '960px', margin: '0 auto', padding: '10px 0 40px 0' }}>
-      {/* Top Header & Navigation */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
-        <button
-          onClick={onNavigateBack}
-          style={{
-            background: 'rgba(255, 255, 255, 0.05)',
-            border: '1px solid var(--border-subtle)',
-            borderRadius: 'var(--radius-full)',
-            padding: '8px 18px',
-            color: 'var(--accent-cyan)',
-            cursor: 'pointer',
-            fontSize: '0.88rem',
-            fontWeight: 600,
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '8px'
-          }}
-        >
-          ← Return to Main Hub
-        </button>
+      {/* Top Header & Navigation Bar */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        flexWrap: 'wrap',
+        gap: '12px',
+        marginBottom: '20px'
+      }}>
+        {onNavigateBack && (
+          <button
+            onClick={onNavigateBack}
+            className="btn-glass"
+            style={{
+              padding: '8px 16px',
+              color: 'var(--accent-cyan)',
+              cursor: 'pointer',
+              fontSize: '0.86rem',
+              fontWeight: 600,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              minHeight: '40px',
+              borderRadius: 'var(--radius-full)'
+            }}
+          >
+            ← Return to Main Hub
+          </button>
+        )}
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+          flexWrap: 'wrap',
+          marginLeft: 'auto'
+        }}>
           {/* Active AI Status Pill */}
           <div style={{
             display: 'inline-flex',
@@ -182,26 +180,25 @@ export default function TutorWorkspace({ onNavigateBack, initialPrompt = null, i
             gap: '6px',
             background: serverStatus?.hasApiKey ? 'rgba(16, 185, 129, 0.15)' : 'rgba(245, 158, 11, 0.15)',
             border: serverStatus?.hasApiKey ? '1px solid rgba(16, 185, 129, 0.4)' : '1px solid rgba(245, 158, 11, 0.4)',
-            padding: '4px 12px',
+            padding: '5px 12px',
             borderRadius: 'var(--radius-full)',
             color: serverStatus?.hasApiKey ? '#34d399' : '#fbbf24',
             fontSize: '0.78rem',
-            fontWeight: 700
+            fontWeight: 700,
+            minHeight: '36px'
           }}>
-            <Cpu size={14} />
+            <Cpu size={14} style={{ flexShrink: 0 }} />
             <span>
               {serverStatus?.hasApiKey 
-                ? `${serverStatus.primaryProvider || serverStatus.provider}${serverStatus.fallbackConfigured ? ' (+Gemini Fallback)' : ''}`
-                : 'API Setup Required'}
+                ? `${serverStatus.primaryProvider || serverStatus.provider}${serverStatus.fallbackConfigured ? ' (+Fallback)' : ''}`
+                : 'API Key Needed'}
             </span>
           </div>
 
           <button
             onClick={() => setShowConfigModal(!showConfigModal)}
+            className="btn-glass"
             style={{
-              background: 'rgba(255, 255, 255, 0.05)',
-              border: '1px solid var(--border-subtle)',
-              borderRadius: 'var(--radius-full)',
               padding: '6px 14px',
               color: 'var(--accent-lavender)',
               fontSize: '0.8rem',
@@ -209,30 +206,32 @@ export default function TutorWorkspace({ onNavigateBack, initialPrompt = null, i
               display: 'flex',
               alignItems: 'center',
               gap: '6px',
-              fontWeight: 600
+              fontWeight: 600,
+              minHeight: '36px',
+              borderRadius: 'var(--radius-full)'
             }}
           >
-            <Key size={14} />
+            <Key size={14} style={{ flexShrink: 0 }} />
             <span>Setup Instructions</span>
           </button>
 
           <button
             onClick={handleClearChat}
             title="Start new conversation"
+            className="btn-glass"
             style={{
-              background: 'rgba(255, 255, 255, 0.05)',
-              border: '1px solid var(--border-subtle)',
-              borderRadius: 'var(--radius-full)',
-              padding: '6px 14px',
+              padding: '6px 12px',
               color: 'var(--text-muted)',
               fontSize: '0.8rem',
               cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
-              gap: '6px'
+              gap: '6px',
+              minHeight: '36px',
+              borderRadius: 'var(--radius-full)'
             }}
           >
-            <RotateCcw size={14} />
+            <RotateCcw size={14} style={{ flexShrink: 0 }} />
             <span>New Chat</span>
           </button>
         </div>
@@ -244,28 +243,28 @@ export default function TutorWorkspace({ onNavigateBack, initialPrompt = null, i
           background: 'rgba(18, 14, 48, 0.98)',
           border: '1px solid var(--accent-purple)',
           borderRadius: 'var(--radius-md)',
-          padding: '24px',
+          padding: 'clamp(16px, 3vw, 24px)',
           marginBottom: '20px',
           boxShadow: '0 8px 32px rgba(139, 92, 246, 0.25)'
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--accent-cyan)' }}>
               <Sparkles size={20} />
-              <h3 style={{ fontSize: '1.1rem', fontWeight: 800 }}>Connecting a Free Real AI Model</h3>
+              <h3 style={{ fontSize: '1.05rem', fontWeight: 800, margin: 0 }}>Connecting a Free Real AI Model</h3>
             </div>
             <button
               onClick={() => setShowConfigModal(false)}
-              style={{ background: 'transparent', border: 'none', color: 'var(--text-dim)', cursor: 'pointer', fontSize: '1.2rem' }}
+              style={{ background: 'transparent', border: 'none', color: 'var(--text-dim)', cursor: 'pointer', fontSize: '1.2rem', padding: '4px' }}
             >
               ✕
             </button>
           </div>
 
-          <p style={{ fontSize: '0.88rem', color: '#e2e8f0', lineHeight: 1.6, marginBottom: '16px' }}>
-            Nova Learn is equipped with a secure local proxy server (running on <code>http://localhost:3001</code>) that communicates with official AI providers without exposing API credentials to the client browser.
+          <p style={{ fontSize: '0.85rem', color: '#e2e8f0', lineHeight: 1.6, marginBottom: '16px' }}>
+            Nova Learn runs an isolated local proxy server (running on <code>http://localhost:3001</code>) that processes student prompts server-side without exposing API keys to client browsers.
           </p>
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '16px', marginBottom: '16px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '14px', marginBottom: '16px' }}>
             <div style={{
               background: 'rgba(255, 255, 255, 0.03)',
               border: '1px solid var(--border-subtle)',
@@ -273,10 +272,10 @@ export default function TutorWorkspace({ onNavigateBack, initialPrompt = null, i
               padding: '14px'
             }}>
               <span className="badge-pill badge-cyan" style={{ marginBottom: '8px' }}>Option A: Groq Cloud (Recommended Primary)</span>
-              <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', lineHeight: 1.5, marginBottom: '8px' }}>
-                GPT-OSS 120B reasoning model on free tier (800 requests/day safe ceiling, no credit card required).
+              <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', lineHeight: 1.5, marginBottom: '8px' }}>
+                Fast inference model on official free tier (no credit card or billing required).
               </p>
-              <ol style={{ fontSize: '0.8rem', color: '#cbd5e1', paddingLeft: '18px', lineHeight: 1.6 }}>
+              <ol style={{ fontSize: '0.78rem', color: '#cbd5e1', paddingLeft: '18px', lineHeight: 1.6 }}>
                 <li>Get a free key from <a href="https://console.groq.com/keys" target="_blank" rel="noreferrer" style={{ color: 'var(--accent-cyan)' }}>Groq Console</a></li>
                 <li><strong>Local:</strong> Add <code>GROQ_API_KEY=your_key</code> in <code>.env</code></li>
                 <li><strong>Cloud:</strong> Add in your hosting provider's Environment Variables</li>
@@ -290,20 +289,20 @@ export default function TutorWorkspace({ onNavigateBack, initialPrompt = null, i
               padding: '14px'
             }}>
               <span className="badge-pill badge-purple" style={{ marginBottom: '8px' }}>Option B: Google Gemini (Secondary Fallback)</span>
-              <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', lineHeight: 1.5, marginBottom: '8px' }}>
-                Gemini 3.8 Flash (500 requests/day safe ceiling). Acts as an instant automatic fallback if Groq is busy.
+              <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', lineHeight: 1.5, marginBottom: '8px' }}>
+                Instant automatic fallback provider if Groq is temporarily busy or rate-limited.
               </p>
-              <ol style={{ fontSize: '0.8rem', color: '#cbd5e1', paddingLeft: '18px', lineHeight: 1.6 }}>
+              <ol style={{ fontSize: '0.78rem', color: '#cbd5e1', paddingLeft: '18px', lineHeight: 1.6 }}>
                 <li>Get a free key from <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" style={{ color: 'var(--accent-lavender)' }}>Google AI Studio</a></li>
                 <li><strong>Local:</strong> Add <code>GEMINI_API_KEY=your_key</code> in <code>.env</code></li>
-                <li><strong>Dual-Provider:</strong> Adding both provides 1,300 free queries/day (~21 queries/student)</li>
+                <li><strong>Dual-Provider:</strong> Adding both provides seamless automatic failover</li>
               </ol>
             </div>
           </div>
 
-          <div style={{ fontSize: '0.8rem', color: 'var(--text-dim)', borderTop: '1px solid var(--border-subtle)', paddingTop: '10px', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
-            <span>🔒 <strong>Zero Billing Risk:</strong> Only official free-tier APIs are used. No billing or credit cards are ever required.</span>
-            <span>🎓 <strong>60-Student Capacity:</strong> Sized for ~21 daily inquiries per student with zero downtime.</span>
+          <div style={{ fontSize: '0.78rem', color: 'var(--text-dim)', borderTop: '1px solid var(--border-subtle)', paddingTop: '10px', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
+            <span>🔒 <strong>Zero Billing Risk:</strong> Only free-tier endpoints are utilized. No credit cards required.</span>
+            <span>🎓 <strong>60-Student Capacity:</strong> Server-side daily quotas protect and buffer rate limits.</span>
           </div>
         </div>
       )}
@@ -312,16 +311,17 @@ export default function TutorWorkspace({ onNavigateBack, initialPrompt = null, i
       <div className="glass-panel" style={{ borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
         {/* Controls Bar */}
         <div style={{
-          padding: '16px 24px',
+          padding: 'clamp(14px, 2.5vw, 18px) clamp(16px, 3vw, 24px)',
           background: 'rgba(26, 21, 59, 0.9)',
           borderBottom: '1px solid var(--border-subtle)',
           display: 'flex',
           flexWrap: 'wrap',
           alignItems: 'center',
           justifyContent: 'space-between',
-          gap: '12px'
+          gap: '14px'
         }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          {/* Tutor Title & Badge */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: '220px' }}>
             <div style={{
               width: '42px',
               height: '42px',
@@ -330,33 +330,42 @@ export default function TutorWorkspace({ onNavigateBack, initialPrompt = null, i
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              boxShadow: '0 0 15px rgba(56, 189, 248, 0.4)'
+              boxShadow: '0 0 15px rgba(56, 189, 248, 0.4)',
+              flexShrink: 0
             }}>
               <Bot size={22} color="#ffffff" />
             </div>
             <div>
-              <h3 style={{ fontSize: '1.1rem', fontWeight: 800 }}>Nova AI Study Tutor</h3>
-              <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-                Intelligent academic tutor across all 15 disciplines
+              <h3 style={{ fontSize: '1.05rem', fontWeight: 800, margin: 0 }}>Nova AI Study Tutor</h3>
+              <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: '2px 0 0 0' }}>
+                Intelligent academic coach across all 15 university subjects
               </p>
             </div>
           </div>
 
-          {/* Controls: Subject Focus & Depth */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          {/* Controls: Subject Focus & Explanation Depth */}
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '10px',
+            flexWrap: 'wrap',
+            width: 'auto'
+          }}>
             {/* Subject Selector */}
             <select
               value={selectedSubject}
               onChange={(e) => setSelectedSubject(e.target.value)}
               style={{
-                background: 'rgba(255, 255, 255, 0.05)',
+                background: 'rgba(15, 12, 38, 0.95)',
                 border: '1px solid var(--border-subtle)',
                 borderRadius: 'var(--radius-full)',
                 padding: '6px 14px',
                 color: '#ffffff',
                 fontSize: '0.82rem',
                 outline: 'none',
-                cursor: 'pointer'
+                cursor: 'pointer',
+                minHeight: '36px',
+                maxWidth: '100%'
               }}
             >
               <option value="All Subjects" style={{ background: '#120e30' }}>Focus: All Subjects</option>
@@ -378,38 +387,44 @@ export default function TutorWorkspace({ onNavigateBack, initialPrompt = null, i
 
             {/* Depth Selector */}
             <div style={{
-              display: 'flex',
+              display: 'inline-flex',
               background: 'rgba(255, 255, 255, 0.05)',
               border: '1px solid var(--border-subtle)',
               borderRadius: 'var(--radius-full)',
-              padding: '3px'
+              padding: '2px',
+              minHeight: '36px',
+              alignItems: 'center'
             }}>
               <button
+                type="button"
                 onClick={() => setExplanationDepth('simple')}
                 style={{
                   background: explanationDepth === 'simple' ? 'var(--accent-purple)' : 'transparent',
                   border: 'none',
                   color: '#ffffff',
-                  padding: '4px 12px',
+                  padding: '5px 12px',
                   borderRadius: 'var(--radius-full)',
                   fontSize: '0.78rem',
                   fontWeight: 600,
-                  cursor: 'pointer'
+                  cursor: 'pointer',
+                  minHeight: '30px'
                 }}
               >
                 Simple
               </button>
               <button
+                type="button"
                 onClick={() => setExplanationDepth('detailed')}
                 style={{
                   background: explanationDepth === 'detailed' ? 'var(--accent-purple)' : 'transparent',
                   border: 'none',
                   color: '#ffffff',
-                  padding: '4px 12px',
+                  padding: '5px 12px',
                   borderRadius: 'var(--radius-full)',
                   fontSize: '0.78rem',
                   fontWeight: 600,
-                  cursor: 'pointer'
+                  cursor: 'pointer',
+                  minHeight: '30px'
                 }}
               >
                 Detailed
@@ -420,13 +435,13 @@ export default function TutorWorkspace({ onNavigateBack, initialPrompt = null, i
 
         {/* Chat Feed */}
         <div style={{
-          minHeight: '420px',
+          minHeight: '360px',
           maxHeight: '560px',
           overflowY: 'auto',
-          padding: '24px',
+          padding: 'clamp(14px, 3vw, 24px)',
           display: 'flex',
           flexDirection: 'column',
-          gap: '20px'
+          gap: '18px'
         }}>
           {messages.map((msg, i) => (
             <div
@@ -434,26 +449,29 @@ export default function TutorWorkspace({ onNavigateBack, initialPrompt = null, i
               style={{
                 display: 'flex',
                 flexDirection: 'column',
-                alignItems: msg.sender === 'user' ? 'flex-end' : 'flex-start'
+                alignItems: msg.sender === 'user' ? 'flex-end' : 'flex-start',
+                width: '100%'
               }}
             >
               <div style={{
-                maxWidth: '88%',
-                padding: '18px 22px',
+                maxWidth: 'min(92%, 760px)',
+                width: 'fit-content',
+                padding: 'clamp(12px, 2.5vw, 18px) clamp(14px, 3vw, 22px)',
                 borderRadius: 'var(--radius-md)',
                 background: msg.sender === 'user'
                   ? 'linear-gradient(135deg, var(--accent-purple), var(--accent-violet))'
                   : msg.isError
                     ? 'rgba(239, 68, 68, 0.12)'
                     : 'rgba(18, 14, 48, 0.95)',
-                border: msg.sender === 'user' ? 'none' : msg.isError ? '1px solid var(--accent-coral)' : '1px solid var(--border-subtle)',
+                border: msg.sender === 'user' ? 'none' : msg.isError ? '1px solid rgba(239, 68, 68, 0.4)' : '1px solid var(--border-subtle)',
                 boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
-                position: 'relative'
+                position: 'relative',
+                boxSizing: 'border-box'
               }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', gap: '8px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
                     {msg.topic && (
-                      <span className={`badge-pill ${msg.isError ? 'badge-coral' : 'badge-purple'}`} style={{ fontSize: '0.72rem' }}>
+                      <span className={`badge-pill ${msg.isError ? 'badge-coral' : 'badge-purple'}`} style={{ fontSize: '0.7rem' }}>
                         {msg.topic}
                       </span>
                     )}
@@ -483,7 +501,8 @@ export default function TutorWorkspace({ onNavigateBack, initialPrompt = null, i
                         display: 'flex',
                         alignItems: 'center',
                         gap: '4px',
-                        fontSize: '0.75rem'
+                        fontSize: '0.74rem',
+                        padding: '4px'
                       }}
                     >
                       {copiedIndex === i ? <Check size={14} /> : <Copy size={14} />}
@@ -493,10 +512,11 @@ export default function TutorWorkspace({ onNavigateBack, initialPrompt = null, i
                 </div>
 
                 <div style={{
-                  fontSize: '0.94rem',
+                  fontSize: 'clamp(0.88rem, 1.8vw, 0.95rem)',
                   color: '#ffffff',
-                  lineHeight: 1.7,
+                  lineHeight: 1.65,
                   whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
                   fontFamily: 'var(--font-sans)'
                 }}>
                   {msg.content}
@@ -505,15 +525,15 @@ export default function TutorWorkspace({ onNavigateBack, initialPrompt = null, i
                 {/* Connected Library Lessons Links */}
                 {msg.relevantLessons && msg.relevantLessons.length > 0 && (
                   <div style={{
-                    marginTop: '16px',
-                    paddingTop: '12px',
+                    marginTop: '14px',
+                    paddingTop: '10px',
                     borderTop: '1px solid rgba(255, 255, 255, 0.08)'
                   }}>
-                    <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--accent-cyan)', display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '8px' }}>
+                    <span style={{ fontSize: '0.74rem', fontWeight: 700, color: 'var(--accent-cyan)', display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '8px' }}>
                       <BookOpen size={13} />
                       <span>Referenced from Nova Learn Library:</span>
                     </span>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
                       {msg.relevantLessons.map((l, lIdx) => (
                         <div
                           key={lIdx}
@@ -521,8 +541,8 @@ export default function TutorWorkspace({ onNavigateBack, initialPrompt = null, i
                             background: 'rgba(56, 189, 248, 0.08)',
                             border: '1px solid var(--border-cyan)',
                             borderRadius: 'var(--radius-sm)',
-                            padding: '6px 12px',
-                            fontSize: '0.8rem',
+                            padding: '4px 10px',
+                            fontSize: '0.78rem',
                             color: '#e0f2fe'
                           }}
                         >
@@ -536,7 +556,13 @@ export default function TutorWorkspace({ onNavigateBack, initialPrompt = null, i
 
               {/* Follow-up question chips */}
               {msg.followUps && msg.followUps.length > 0 && (
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginTop: '10px', maxWidth: '88%' }}>
+                <div style={{
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  gap: '6px',
+                  marginTop: '8px',
+                  maxWidth: 'min(92%, 760px)'
+                }}>
                   {msg.followUps.map((fu, fIdx) => (
                     <button
                       key={fIdx}
@@ -545,16 +571,17 @@ export default function TutorWorkspace({ onNavigateBack, initialPrompt = null, i
                         background: 'rgba(56, 189, 248, 0.08)',
                         border: '1px solid var(--border-cyan)',
                         color: 'var(--accent-cyan)',
-                        padding: '4px 12px',
+                        padding: '4px 10px',
                         borderRadius: 'var(--radius-full)',
-                        fontSize: '0.78rem',
+                        fontSize: '0.76rem',
                         cursor: 'pointer',
                         display: 'flex',
                         alignItems: 'center',
-                        gap: '5px'
+                        gap: '5px',
+                        textAlign: 'left'
                       }}
                     >
-                      <Lightbulb size={12} />
+                      <Lightbulb size={12} style={{ flexShrink: 0 }} />
                       <span>{fu}</span>
                     </button>
                   ))}
@@ -569,13 +596,13 @@ export default function TutorWorkspace({ onNavigateBack, initialPrompt = null, i
               display: 'flex',
               alignItems: 'center',
               gap: '10px',
-              padding: '14px 20px',
+              padding: '12px 18px',
               background: 'rgba(18, 14, 48, 0.7)',
               borderRadius: 'var(--radius-md)',
               border: '1px solid var(--border-subtle)',
               width: 'fit-content',
               color: 'var(--accent-cyan)',
-              fontSize: '0.88rem'
+              fontSize: '0.85rem'
             }}>
               <Bot size={18} className="animate-spin" />
               <span>Nova AI Tutor is synthesizing comprehensive response...</span>
@@ -587,15 +614,16 @@ export default function TutorWorkspace({ onNavigateBack, initialPrompt = null, i
 
         {/* Suggested Prompts Shelf */}
         <div style={{
-          padding: '10px 20px',
+          padding: '10px 16px',
           background: 'rgba(10, 8, 30, 0.8)',
           borderTop: '1px solid var(--border-subtle)',
           overflowX: 'auto',
           display: 'flex',
           gap: '8px',
-          whiteSpace: 'nowrap'
+          whiteSpace: 'nowrap',
+          scrollbarWidth: 'thin'
         }}>
-          <span style={{ fontSize: '0.74rem', color: 'var(--text-dim)', alignSelf: 'center', marginRight: '4px' }}>
+          <span style={{ fontSize: '0.74rem', color: 'var(--text-dim)', alignSelf: 'center', marginRight: '4px', flexShrink: 0 }}>
             Suggestions:
           </span>
           {SUGGESTED_PROMPTS.map((p, pIdx) => (
@@ -606,10 +634,11 @@ export default function TutorWorkspace({ onNavigateBack, initialPrompt = null, i
                 background: 'rgba(255, 255, 255, 0.04)',
                 border: '1px solid var(--border-subtle)',
                 borderRadius: 'var(--radius-full)',
-                padding: '4px 12px',
+                padding: '5px 12px',
                 color: 'var(--text-muted)',
                 fontSize: '0.76rem',
-                cursor: 'pointer'
+                cursor: 'pointer',
+                flexShrink: 0
               }}
             >
               {p}
@@ -619,11 +648,12 @@ export default function TutorWorkspace({ onNavigateBack, initialPrompt = null, i
 
         {/* Message Input Box */}
         <div style={{
-          padding: '16px 20px',
+          padding: '12px 16px',
           background: 'rgba(14, 11, 40, 0.95)',
           borderTop: '1px solid var(--border-subtle)',
           display: 'flex',
-          gap: '12px'
+          gap: '10px',
+          alignItems: 'center'
         }}>
           <input
             type="text"
@@ -631,25 +661,32 @@ export default function TutorWorkspace({ onNavigateBack, initialPrompt = null, i
             disabled={isLoading}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-            placeholder="Ask anything across all 15 subjects (e.g. explain theories, solve equations, generate MCQs)..."
+            placeholder="Ask anything (e.g. explain theories, solve equations)..."
             style={{
               flex: 1,
+              minWidth: 0,
               background: 'rgba(255, 255, 255, 0.05)',
               border: '1px solid var(--border-subtle)',
               borderRadius: 'var(--radius-full)',
-              padding: '12px 20px',
+              padding: '10px 16px',
               color: '#ffffff',
-              fontSize: '0.95rem',
-              outline: 'none'
+              fontSize: '0.9rem',
+              outline: 'none',
+              boxSizing: 'border-box'
             }}
           />
           <button
             onClick={() => handleSend()}
             disabled={!input.trim() || isLoading}
             className="btn-primary"
-            style={{ padding: '0 24px', borderRadius: 'var(--radius-full)' }}
+            style={{
+              padding: '0 20px',
+              borderRadius: 'var(--radius-full)',
+              minHeight: '42px',
+              flexShrink: 0
+            }}
           >
-            <Send size={17} />
+            <Send size={16} />
             <span>Send</span>
           </button>
         </div>

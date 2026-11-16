@@ -54,7 +54,7 @@ export default function Navbar({ activeTab, setActiveTab, progress, onOpenProfil
         {/* Brand Identity */}
         <div 
           onClick={() => handleNavClick('home')}
-          style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}
+          style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', zIndex: 101 }}
         >
           <div style={{
             width: '38px',

@@ -13,9 +13,71 @@ import {
   User,
   Medal,
   Award,
-  Zap
+  Zap,
+  Users
 } from 'lucide-react';
 import { fetchGlobalLeaderboard, getStoredStudent } from '../services/studentService';
+
+/**
+ * Normalizes any response into a clean, safe array of student entries.
+ * Handles objects, null, undefined, arrays, and malformed inputs.
+ */
+function normalizeLeaderboardData(raw) {
+  if (!raw) return [];
+  
+  let list = [];
+  if (Array.isArray(raw)) {
+    list = raw;
+  } else if (raw && typeof raw === 'object') {
+    if (Array.isArray(raw.leaderboard)) {
+      list = raw.leaderboard;
+    } else if (Array.isArray(raw.students)) {
+      list = raw.students;
+    } else if (Array.isArray(raw.data)) {
+      list = raw.data;
+    }
+  }
+
+  // Ensure each entry is an object with valid required properties
+  const safeList = list.filter(item => item && typeof item === 'object').map((item, index) => {
+    const studentId = item.id || item.studentId || `student_${index}`;
+    const displayName = typeof item.displayName === 'string' && item.displayName.trim()
+      ? item.displayName.trim()
+      : (typeof item.name === 'string' && item.name.trim() ? item.name.trim() : `Scholar_${index + 1}`);
+    const xp = typeof item.xp === 'number' && !isNaN(item.xp) ? item.xp : (Number(item.xp) || 0);
+    const totalXp = typeof item.totalXp === 'number' && !isNaN(item.totalXp) ? item.totalXp : xp;
+    const streak = typeof item.streak === 'number' && !isNaN(item.streak) ? item.streak : (Number(item.streak) || 1);
+    const level = typeof item.level === 'number' && !isNaN(item.level) ? item.level : (Math.floor(totalXp / 250) + 1);
+    const avatar = typeof item.avatar === 'string' && item.avatar ? item.avatar : '🎓';
+    const grade = typeof item.grade === 'string' && item.grade ? item.grade : 'Scholar';
+
+    return {
+      id: studentId,
+      studentId,
+      displayName,
+      avatar,
+      grade,
+      xp,
+      totalXp,
+      streak,
+      level,
+      isCurrent: Boolean(item.isCurrent)
+    };
+  });
+
+  // Sort descending by XP, tiebreaking by totalXp and displayName
+  safeList.sort((a, b) => {
+    if (b.xp !== a.xp) return b.xp - a.xp;
+    if (b.totalXp !== a.totalXp) return b.totalXp - a.totalXp;
+    return a.displayName.localeCompare(b.displayName);
+  });
+
+  // Re-index ranks 1..N
+  return safeList.map((entry, idx) => ({
+    ...entry,
+    rank: idx + 1
+  }));
+}
 
 export default function GlobalLeaderboard({ onNavigateBack, onLaunchArena, onOpenProfile }) {
   const [period, setPeriod] = useState('all'); // 'daily' | 'weekly' | 'all'
@@ -27,38 +89,59 @@ export default function GlobalLeaderboard({ onNavigateBack, onLaunchArena, onOpe
 
   const loadLeaderboard = async (selectedPeriod = period) => {
     setLoading(true);
-    const data = await fetchGlobalLeaderboard(selectedPeriod);
-    setLeaderboardData(data);
-    setLastUpdated(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
-    
-    // Check if current user is in the list
-    if (currentLocalStudent && currentLocalStudent.studentId) {
-      const match = data.find(item => item.id === currentLocalStudent.studentId);
-      if (match) {
-        setCurrentStudentEntry(match);
+    try {
+      const rawData = await fetchGlobalLeaderboard(selectedPeriod);
+      const normalized = normalizeLeaderboardData(rawData);
+      setLeaderboardData(normalized);
+      setLastUpdated(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+
+      // Resolve live rank of current logged-in student
+      if (currentLocalStudent && currentLocalStudent.studentId) {
+        const found = normalized.find(item => item.id === currentLocalStudent.studentId || item.studentId === currentLocalStudent.studentId);
+        if (found) {
+          setCurrentStudentEntry({
+            ...found,
+            isCurrent: true
+          });
+        } else {
+          // Compute position based on current user's XP
+          const userXp = currentLocalStudent.xp || 0;
+          let calculatedRank = 1;
+          for (const other of normalized) {
+            if (other.xp > userXp) {
+              calculatedRank++;
+            }
+          }
+          setCurrentStudentEntry({
+            id: currentLocalStudent.studentId,
+            studentId: currentLocalStudent.studentId,
+            displayName: currentLocalStudent.displayName || 'You',
+            avatar: currentLocalStudent.avatar || '🚀',
+            grade: currentLocalStudent.grade || 'Scholar',
+            xp: userXp,
+            streak: currentLocalStudent.streak || 1,
+            level: currentLocalStudent.level || 1,
+            rank: calculatedRank > normalized.length ? `${normalized.length}+` : calculatedRank,
+            isCurrent: true
+          });
+        }
       } else {
-        // Compute hypothetical position
-        setCurrentStudentEntry({
-          id: currentLocalStudent.studentId,
-          displayName: currentLocalStudent.displayName || 'You',
-          avatar: currentLocalStudent.avatar || '🚀',
-          grade: currentLocalStudent.grade || 'Scholar',
-          xp: currentLocalStudent.xp || 0,
-          streak: currentLocalStudent.streak || 1,
-          level: currentLocalStudent.level || 1,
-          rank: '50+'
-        });
+        setCurrentStudentEntry(null);
       }
+    } catch (err) {
+      console.warn('Leaderboard load error, fallback safely:', err);
+      setLeaderboardData([]);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   useEffect(() => {
     loadLeaderboard(period);
   }, [period]);
 
-  const top3 = leaderboardData.slice(0, 3);
-  const restList = leaderboardData.slice(3);
+  const top3 = Array.isArray(leaderboardData) ? leaderboardData.slice(0, 3) : [];
+  const restList = Array.isArray(leaderboardData) ? leaderboardData.slice(3) : [];
 
   // Podium order: 2nd place (left), 1st place (center), 3rd place (right)
   const podiumOrder = [
@@ -109,7 +192,24 @@ export default function GlobalLeaderboard({ onNavigateBack, onLaunchArena, onOpe
             </p>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            {onNavigateBack && (
+              <button
+                onClick={onNavigateBack}
+                className="btn-glass"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '8px 14px',
+                  fontSize: '0.85rem',
+                  minHeight: '40px',
+                  cursor: 'pointer'
+                }}
+              >
+                <span>← Home Hub</span>
+              </button>
+            )}
             <button
               onClick={() => loadLeaderboard(period)}
               className="btn-glass"
@@ -204,7 +304,10 @@ export default function GlobalLeaderboard({ onNavigateBack, onLaunchArena, onOpe
           {podiumOrder.map((entry) => {
             if (!entry) return null;
             const isFirst = entry.place === 1;
-            const isUser = currentLocalStudent?.studentId === entry.id;
+            const isUser = Boolean(
+              currentLocalStudent?.studentId &&
+              (currentLocalStudent.studentId === entry.id || currentLocalStudent.studentId === entry.studentId)
+            );
 
             return (
               <div
@@ -300,7 +403,9 @@ export default function GlobalLeaderboard({ onNavigateBack, onLaunchArena, onOpe
           borderBottom: '1px solid var(--border-subtle)',
           display: 'flex',
           justifyContent: 'space-between',
-          alignItems: 'center'
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: '8px'
         }}>
           <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
             Ranked Scholars ({leaderboardData.length} Active Students)
@@ -334,13 +439,14 @@ export default function GlobalLeaderboard({ onNavigateBack, onLaunchArena, onOpe
                 fontSize: '0.85rem',
                 display: 'flex',
                 alignItems: 'center',
-                justifyContent: 'center'
+                justifyContent: 'center',
+                flexShrink: 0
               }}>
                 #{currentStudentEntry.rank}
               </div>
-              <div style={{ fontSize: '1.4rem' }}>{currentStudentEntry.avatar}</div>
+              <div style={{ fontSize: '1.4rem', flexShrink: 0 }}>{currentStudentEntry.avatar}</div>
               <div>
-                <div style={{ fontWeight: 700, fontSize: '0.95rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <div style={{ fontWeight: 700, fontSize: '0.95rem', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
                   <span>{currentStudentEntry.displayName}</span>
                   <span className="badge-pill badge-cyan" style={{ fontSize: '0.65rem' }}>Your Live Rank</span>
                 </div>
@@ -348,9 +454,9 @@ export default function GlobalLeaderboard({ onNavigateBack, onLaunchArena, onOpe
               </div>
             </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexShrink: 0 }}>
               <div style={{ textAlign: 'right' }}>
-                <span style={{ color: 'var(--accent-gold)', fontWeight: 800, fontSize: '0.95rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <span style={{ color: 'var(--accent-gold)', fontWeight: 800, fontSize: '0.95rem', display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'flex-end' }}>
                   <Star size={14} /> {currentStudentEntry.xp} XP
                 </span>
                 <span style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>
@@ -361,89 +467,120 @@ export default function GlobalLeaderboard({ onNavigateBack, onLaunchArena, onOpe
           </div>
         )}
 
-        {/* List of Scholars */}
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
-          {leaderboardData.map((student, idx) => {
-            const rank = idx + 1;
-            const isCurrentUser = currentLocalStudent?.studentId === student.id;
+        {/* List of Scholars or Empty State */}
+        {leaderboardData.length === 0 ? (
+          <div style={{ padding: '40px 20px', textAlign: 'center', color: 'var(--text-muted)' }}>
+            <div style={{
+              width: '60px',
+              height: '60px',
+              borderRadius: '50%',
+              background: 'rgba(255, 255, 255, 0.05)',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              marginBottom: '12px'
+            }}>
+              <Users size={28} color="var(--accent-cyan)" />
+            </div>
+            <h3 style={{ fontSize: '1.1rem', fontWeight: 700, color: '#ffffff', margin: '0 0 6px 0' }}>
+              No Registered Scholars Yet
+            </h3>
+            <p style={{ fontSize: '0.88rem', margin: '0 0 16px 0', maxWidth: '420px', marginInline: 'auto' }}>
+              Be the first scholar to claim rank #1 by completing an academic chapter or a Quiz Arena challenge.
+            </p>
+            {onLaunchArena && (
+              <button onClick={onLaunchArena} className="btn-cyan" style={{ minHeight: '40px', padding: '8px 18px' }}>
+                Start Quiz Arena (+50 XP)
+              </button>
+            )}
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            {leaderboardData.map((student, idx) => {
+              const rank = student.rank || idx + 1;
+              const isCurrentUser = Boolean(
+                student.isCurrent || 
+                (currentLocalStudent?.studentId && (student.id === currentLocalStudent.studentId || student.studentId === currentLocalStudent.studentId))
+              );
 
-            return (
-              <div
-                key={student.id || idx}
-                style={{
-                  padding: '14px 20px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  borderBottom: '1px solid var(--border-subtle)',
-                  background: isCurrentUser ? 'rgba(56, 189, 248, 0.08)' : 'transparent',
-                  transition: 'var(--transition-smooth)'
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '14px', minWidth: 0 }}>
-                  <span style={{
-                    width: '28px',
-                    textAlign: 'center',
-                    fontWeight: 700,
-                    fontSize: '0.9rem',
-                    color: rank === 1 ? '#fbbf24' : rank === 2 ? '#94a3b8' : rank === 3 ? '#d97706' : 'var(--text-dim)',
-                    flexShrink: 0
-                  }}>
-                    #{rank}
-                  </span>
+              return (
+                <div
+                  key={student.id || student.studentId || idx}
+                  style={{
+                    padding: '14px 20px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    borderBottom: '1px solid var(--border-subtle)',
+                    background: isCurrentUser ? 'rgba(56, 189, 248, 0.08)' : 'transparent',
+                    transition: 'var(--transition-smooth)'
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '14px', minWidth: 0 }}>
+                    <span style={{
+                      width: '28px',
+                      textAlign: 'center',
+                      fontWeight: 700,
+                      fontSize: '0.9rem',
+                      color: rank === 1 ? '#fbbf24' : rank === 2 ? '#94a3b8' : rank === 3 ? '#d97706' : 'var(--text-dim)',
+                      flexShrink: 0
+                    }}>
+                      #{rank}
+                    </span>
 
-                  <span style={{ fontSize: '1.4rem', flexShrink: 0 }}>{student.avatar || '🎓'}</span>
+                    <span style={{ fontSize: '1.4rem', flexShrink: 0 }}>{student.avatar || '🎓'}</span>
 
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                        <span style={{
+                          fontWeight: isCurrentUser ? 800 : 600,
+                          fontSize: '0.95rem',
+                          color: isCurrentUser ? 'var(--accent-cyan)' : '#ffffff',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap'
+                        }}>
+                          {student.displayName}
+                        </span>
+                        {isCurrentUser && (
+                          <span className="badge-pill badge-cyan" style={{ fontSize: '0.65rem', padding: '1px 6px' }}>
+                            You
+                          </span>
+                        )}
+                        <span className="badge-pill badge-purple" style={{ fontSize: '0.65rem', padding: '1px 6px' }}>
+                          Lvl {student.level || 1}
+                        </span>
+                      </div>
                       <span style={{
-                        fontWeight: isCurrentUser ? 800 : 600,
-                        fontSize: '0.95rem',
-                        color: isCurrentUser ? 'var(--accent-cyan)' : '#ffffff',
+                        color: 'var(--text-muted)',
+                        fontSize: '0.78rem',
+                        display: 'block',
                         overflow: 'hidden',
                         textOverflow: 'ellipsis',
                         whiteSpace: 'nowrap'
                       }}>
-                        {student.displayName}
-                      </span>
-                      {isCurrentUser && (
-                        <span className="badge-pill badge-cyan" style={{ fontSize: '0.65rem', padding: '1px 6px' }}>
-                          You
-                        </span>
-                      )}
-                      <span className="badge-pill badge-purple" style={{ fontSize: '0.65rem', padding: '1px 6px' }}>
-                        Lvl {student.level || 1}
+                        {student.grade || 'Scholar'}
                       </span>
                     </div>
-                    <span style={{
-                      color: 'var(--text-muted)',
-                      fontSize: '0.78rem',
-                      display: 'block',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap'
-                    }}>
-                      {student.grade || 'Scholar'}
-                    </span>
                   </div>
-                </div>
 
-                <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexShrink: 0 }}>
-                  <div style={{ textAlign: 'right' }}>
-                    <div style={{ color: 'var(--accent-gold)', fontWeight: 700, fontSize: '0.95rem', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>
-                      <Star size={13} />
-                      <span>{student.xp} XP</span>
-                    </div>
-                    <div style={{ color: '#fb7185', fontSize: '0.75rem', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '2px' }}>
-                      <Flame size={12} />
-                      <span>{student.streak || 1}d</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexShrink: 0 }}>
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{ color: 'var(--accent-gold)', fontWeight: 700, fontSize: '0.95rem', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>
+                        <Star size={13} />
+                        <span>{student.xp} XP</span>
+                      </div>
+                      <div style={{ color: '#fb7185', fontSize: '0.75rem', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '2px' }}>
+                        <Flame size={12} />
+                        <span>{student.streak || 1}d</span>
+                      </div>
                     </div>
                   </div>
                 </div>
-              </div>
-            );
-          })}
-        </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Action Footer Call to Action */}

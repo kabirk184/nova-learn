@@ -314,6 +314,7 @@ body {
     padding: 24px;
     gap: 12px;
     overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
   }
 
   .mobile-nav-drawer button {
@@ -321,6 +322,17 @@ body {
     justify-content: flex-start;
     padding: 14px 18px;
     font-size: 1.05rem;
+    box-sizing: border-box;
+    position: relative;
+    outline: none;
+    text-decoration: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .mobile-nav-drawer button::before,
+  .mobile-nav-drawer button::after {
+    display: none !important;
+    content: none !important;
   }
 }
 
