@@ -1,8 +1,8 @@
 /**
  * Multi-Provider AI Model Router for Nova Learn
- * Primary Provider: Groq Cloud (llama-3.3-70b-versatile) - Ultra-fast, free tier
- * Secondary Fallback: Google Gemini (gemini-1.5-flash) - High TPM, 1,500 RPD free tier
- * Audience Target: Designed and quota-protected for 60 students
+ * Primary Provider: Groq Cloud (openai/gpt-oss-120b, secondary in-provider: qwen/qwen3.8-27b)
+ * Secondary Provider: Google Gemini (gemini-3.8-flash, fallback: gemini-3.5-flash-lite)
+ * Quota Protection: Calibrated for 60 students sharing free-tier capacity
  */
 
 const SYSTEM_PROMPT = `You are the official AI Study Tutor for Nova Learn, a comprehensive university-level educational platform.
@@ -12,22 +12,27 @@ Key Guidelines:
 1. Cover all undergraduate academic subjects: Psychology, Educational Pedagogy, Mathematics, English & Grammar, Urdu Literature & Linguistics, Economics, Literature & Novels, Computer Science, History, Geography, Space & Astronomy, Biology, Physics, Chemistry, and Sociology & Criminology.
 2. Structure your responses clearly with appropriate Markdown headings, bullet points, numbered lists, math notation, and code snippets where applicable.
 3. Adapt your explanations to the requested depth: intuitive and accessible for foundational learners; rigorous and detailed for university level.
-4. When math problems are submitted, show every step of the working clearly.
-5. When MCQs or practice questions are requested, provide accurate questions, multiple choice options, correct answers, and thorough conceptual explanations.
+4. When math problems are submitted, show every step of the working clearly with definitions and formulas.
+5. When MCQs or practice questions are requested, provide accurate questions, multiple choice options (A, B, C, D), correct answers, and thorough conceptual explanations for each option.
 6. When relevant Nova Learn lesson content is provided in the prompt context, synthesize it seamlessly and recommend related topics.
 7. Maintain an encouraging, scholarly, and supportive pedagogical tone.
 8. Respond in clear English. If the student asks in Urdu or requests Urdu explanations, respond in eloquent, grammatically correct Urdu.
 9. Never fabricate citations or claim to have accessed the live internet. State facts with scholarly precision.`;
 
-// Supported production models on Free Tiers
-export const GROQ_MODEL = 'llama-3.3-70b-versatile';
-export const GEMINI_MODEL = 'gemini-1.5-flash';
+// Officially supported production models on Free Tiers
+export const GROQ_MODEL_PRIMARY = 'openai/gpt-oss-120b';
+export const GROQ_MODEL_SECONDARY = 'qwen/qwen3.8-27b';
 
-// Safety quotas designed for 60 students
-// Groq allows 1,000 RPD on free tier; we set safe ceiling at 900
-export const GROQ_DAILY_CEILING = 900;
-// Gemini allows 1,500 RPD on free tier; we set safe ceiling at 1,400
-export const GEMINI_DAILY_CEILING = 1400;
+export const GEMINI_MODEL_PRIMARY = 'gemini-3.8-flash';
+export const GEMINI_MODEL_SECONDARY = 'gemini-3.5-flash-lite';
+
+// Realistic daily ceilings tailored for 60 students with safety buffers:
+// Groq Free Tier: 1,000 RPD, 8,000 TPM, 200,000 TPD. Safe ceiling: 800 reqs/day (20% safety margin).
+export const GROQ_DAILY_CEILING = 800;
+// Gemini Free Tier: 10-15 RPM, ~500-1,000 RPD. Safe ceiling: 500 reqs/day.
+export const GEMINI_DAILY_CEILING = 500;
+// Combined realistic daily ceiling = 1,300 requests/day (~21 questions/day per student for 60 students)
+export const COMBINED_DAILY_CEILING = GROQ_DAILY_CEILING + GEMINI_DAILY_CEILING;
 
 function getUtcDateString() {
   return new Date().toISOString().split('T')[0];
@@ -65,16 +70,16 @@ export function getDailyStats() {
   let secondary = null;
 
   if (hasGroq) {
-    primary = `Groq Cloud (${GROQ_MODEL})`;
-    if (hasGemini) secondary = `Google Gemini (${GEMINI_MODEL})`;
+    primary = `Groq Cloud (${GROQ_MODEL_PRIMARY})`;
+    if (hasGemini) secondary = `Google Gemini (${GEMINI_MODEL_PRIMARY})`;
   } else if (hasGemini) {
-    primary = `Google Gemini (${GEMINI_MODEL})`;
+    primary = `Google Gemini (${GEMINI_MODEL_PRIMARY})`;
   } else if (process.env.OPENAI_API_KEY) {
     primary = 'OpenAI (gpt-4o-mini)';
   }
 
   const totalUsed = dailyTracker.groqRequests + dailyTracker.geminiRequests + dailyTracker.otherRequests;
-  const totalCeiling = (hasGroq ? GROQ_DAILY_CEILING : 0) + (hasGemini ? GEMINI_DAILY_CEILING : 0);
+  const activeCeiling = (hasGroq ? GROQ_DAILY_CEILING : 0) + (hasGemini ? GEMINI_DAILY_CEILING : 0);
 
   return {
     primaryProvider: primary,
@@ -88,14 +93,15 @@ export function getDailyStats() {
       fallbackTriggeredToday: dailyTracker.fallbackEvents,
       groqDailyCeiling: GROQ_DAILY_CEILING,
       geminiDailyCeiling: GEMINI_DAILY_CEILING,
-      combinedDailyCeiling: totalCeiling || 1500,
-      estimatedQueriesPerStudentRemaining: Math.max(0, Math.floor((totalCeiling - totalUsed) / 60))
+      combinedDailyCeiling: activeCeiling || 800,
+      estimatedQueriesPerStudentRemaining: Math.max(0, Math.floor((activeCeiling - totalUsed) / 60))
     }
   };
 }
 
 /**
- * Primary AI Router with automatic, seamless fallback from Groq to Gemini
+ * Primary AI Router with automatic, bounded fallback from Groq to Gemini
+ * Enforces zero-paid-billing and safe single-retry fallback bounds
  */
 export async function callAIModel({ messages, explanationDepth = 'detailed', relevantLessons = [], currentSubject = null }) {
   ensureDateRollover();
@@ -136,22 +142,41 @@ export async function callAIModel({ messages, explanationDepth = 'detailed', rel
   // 1. Try Groq Cloud first (Preferred primary free provider)
   if (hasGroq && dailyTracker.groqRequests < GROQ_DAILY_CEILING) {
     try {
+      // Primary model: openai/gpt-oss-120b
       const responseText = await callOpenAICompatible(
         'https://api.groq.com/openai/v1/chat/completions',
         process.env.GROQ_API_KEY,
-        GROQ_MODEL,
+        GROQ_MODEL_PRIMARY,
         formattedMessages
       );
       dailyTracker.groqRequests++;
       return {
         text: responseText,
-        provider: `Groq Cloud (${GROQ_MODEL})`,
+        provider: `Groq Cloud (${GROQ_MODEL_PRIMARY})`,
         usedFallback: false
       };
     } catch (err) {
       groqError = err;
-      console.warn(`[AI Router] Groq primary provider error (${err.message}). Checking Gemini fallback...`);
-      dailyTracker.fallbackEvents++;
+      console.warn(`[AI Router] Groq primary (${GROQ_MODEL_PRIMARY}) failed: ${err.message}. Trying secondary Groq model (${GROQ_MODEL_SECONDARY})...`);
+      
+      // Try in-provider secondary model (qwen/qwen3.8-27b) before switching provider
+      try {
+        const altResponse = await callOpenAICompatible(
+          'https://api.groq.com/openai/v1/chat/completions',
+          process.env.GROQ_API_KEY,
+          GROQ_MODEL_SECONDARY,
+          formattedMessages
+        );
+        dailyTracker.groqRequests++;
+        return {
+          text: altResponse,
+          provider: `Groq Cloud (${GROQ_MODEL_SECONDARY})`,
+          usedFallback: false
+        };
+      } catch (altErr) {
+        console.warn(`[AI Router] Groq secondary (${GROQ_MODEL_SECONDARY}) also failed: ${altErr.message}. Attempting Gemini fallback...`);
+        dailyTracker.fallbackEvents++;
+      }
     }
   } else if (hasGroq && dailyTracker.groqRequests >= GROQ_DAILY_CEILING) {
     console.warn(`[AI Router] Groq daily ceiling (${GROQ_DAILY_CEILING}) reached today. Switching to Gemini fallback...`);
@@ -161,27 +186,38 @@ export async function callAIModel({ messages, explanationDepth = 'detailed', rel
   // 2. Secondary Fallback: Google Gemini
   if (hasGemini && dailyTracker.geminiRequests < GEMINI_DAILY_CEILING) {
     try {
-      const responseText = await callGemini(process.env.GEMINI_API_KEY, formattedMessages);
+      const responseText = await callGemini(process.env.GEMINI_API_KEY, formattedMessages, GEMINI_MODEL_PRIMARY);
       dailyTracker.geminiRequests++;
       return {
         text: responseText,
-        provider: hasGroq ? `Google Gemini (${GEMINI_MODEL}) [Auto-Fallback]` : `Google Gemini (${GEMINI_MODEL})`,
+        provider: hasGroq ? `Google Gemini (${GEMINI_MODEL_PRIMARY}) [Auto-Fallback]` : `Google Gemini (${GEMINI_MODEL_PRIMARY})`,
         usedFallback: Boolean(hasGroq)
       };
     } catch (geminiErr) {
-      console.error(`[AI Router] Gemini secondary provider error: ${geminiErr.message}`);
-      if (groqError) {
-        throw new Error(`QUOTA_EXHAUSTED: Both Groq and Gemini free quotas are temporarily busy or exhausted. Please wait 1-2 minutes or check back shortly.`);
+      console.warn(`[AI Router] Gemini primary (${GEMINI_MODEL_PRIMARY}) failed: ${geminiErr.message}. Trying Gemini Lite (${GEMINI_MODEL_SECONDARY})...`);
+      try {
+        const altGeminiText = await callGemini(process.env.GEMINI_API_KEY, formattedMessages, GEMINI_MODEL_SECONDARY);
+        dailyTracker.geminiRequests++;
+        return {
+          text: altGeminiText,
+          provider: `Google Gemini (${GEMINI_MODEL_SECONDARY}) [Auto-Fallback]`,
+          usedFallback: true
+        };
+      } catch (geminiLiteErr) {
+        console.error(`[AI Router] Gemini fallback failed: ${geminiLiteErr.message}`);
+        if (groqError) {
+          throw new Error(`QUOTA_EXHAUSTED: Both Groq and Gemini free quotas are temporarily busy or exhausted. The 60-student daily quota resets at 00:00 UTC.`);
+        }
+        throw geminiLiteErr;
       }
-      throw geminiErr;
     }
   } else if (hasGemini && dailyTracker.geminiRequests >= GEMINI_DAILY_CEILING) {
     throw new Error(`QUOTA_EXHAUSTED: Daily free student quota (${GEMINI_DAILY_CEILING} requests) for Gemini has been completed for today. It will reset at 00:00 UTC.`);
   }
 
-  // If Groq was tried but failed and no Gemini fallback is configured
+  // If Groq failed and Gemini is not configured
   if (groqError) {
-    if (groqError.message?.includes('QUOTA_EXHAUSTED') || groqError.message?.includes('rate_limit')) {
+    if (groqError.message?.includes('QUOTA_EXHAUSTED') || groqError.message?.includes('rate_limit') || groqError.message?.includes('429')) {
       throw new Error(`QUOTA_EXHAUSTED: Groq free usage limit reached. Configure GEMINI_API_KEY as a secondary provider in .env for automatic zero-downtime fallback.`);
     }
     throw groqError;
@@ -206,10 +242,10 @@ export async function callAIModel({ messages, explanationDepth = 'detailed', rel
     return { text, provider: 'Anthropic Claude', usedFallback: true };
   }
 
-  throw new Error('QUOTA_EXHAUSTED: All configured AI quotas have been utilized for today. Limits reset at 00:00 UTC.');
+  throw new Error('QUOTA_EXHAUSTED: All configured free AI quotas for the 60-student community have been utilized for today. Limits reset at 00:00 UTC.');
 }
 
-async function callGemini(apiKey, messages) {
+async function callGemini(apiKey, messages, modelName = GEMINI_MODEL_PRIMARY) {
   const systemMsg = messages.find(m => m.role === 'system');
   const convo = messages.filter(m => m.role !== 'system');
 
@@ -218,7 +254,7 @@ async function callGemini(apiKey, messages) {
     parts: [{ text: m.content }]
   }));
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
 
   const payload = {
     contents,

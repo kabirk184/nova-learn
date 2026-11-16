@@ -274,7 +274,7 @@ export default function TutorWorkspace({ onNavigateBack, initialPrompt = null, i
             }}>
               <span className="badge-pill badge-cyan" style={{ marginBottom: '8px' }}>Option A: Groq Cloud (Recommended Primary)</span>
               <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', lineHeight: 1.5, marginBottom: '8px' }}>
-                Ultra-fast Llama-3.3-70B inference on free tier (1,000 requests/day, no credit card required).
+                GPT-OSS 120B reasoning model on free tier (800 requests/day safe ceiling, no credit card required).
               </p>
               <ol style={{ fontSize: '0.8rem', color: '#cbd5e1', paddingLeft: '18px', lineHeight: 1.6 }}>
                 <li>Get a free key from <a href="https://console.groq.com/keys" target="_blank" rel="noreferrer" style={{ color: 'var(--accent-cyan)' }}>Groq Console</a></li>
@@ -291,19 +291,19 @@ export default function TutorWorkspace({ onNavigateBack, initialPrompt = null, i
             }}>
               <span className="badge-pill badge-purple" style={{ marginBottom: '8px' }}>Option B: Google Gemini (Secondary Fallback)</span>
               <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', lineHeight: 1.5, marginBottom: '8px' }}>
-                Gemini 1.5 Flash (1,500 requests/day free tier). Acts as an instant automatic fallback if Groq is busy.
+                Gemini 3.8 Flash (500 requests/day safe ceiling). Acts as an instant automatic fallback if Groq is busy.
               </p>
               <ol style={{ fontSize: '0.8rem', color: '#cbd5e1', paddingLeft: '18px', lineHeight: 1.6 }}>
                 <li>Get a free key from <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" style={{ color: 'var(--accent-lavender)' }}>Google AI Studio</a></li>
                 <li><strong>Local:</strong> Add <code>GEMINI_API_KEY=your_key</code> in <code>.env</code></li>
-                <li><strong>Dual-Provider:</strong> Adding both provides 2,300+ free queries/day for 60 students</li>
+                <li><strong>Dual-Provider:</strong> Adding both provides 1,300 free queries/day (~21 queries/student)</li>
               </ol>
             </div>
           </div>
 
           <div style={{ fontSize: '0.8rem', color: 'var(--text-dim)', borderTop: '1px solid var(--border-subtle)', paddingTop: '10px', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
             <span>🔒 <strong>Zero Billing Risk:</strong> Only official free-tier APIs are used. No billing or credit cards are ever required.</span>
-            <span>🎓 <strong>60-Student Capacity:</strong> Sized for ~38 daily inquiries per student with zero downtime.</span>
+            <span>🎓 <strong>60-Student Capacity:</strong> Sized for ~21 daily inquiries per student with zero downtime.</span>
           </div>
         </div>
       )}
