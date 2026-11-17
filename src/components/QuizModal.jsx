@@ -19,15 +19,19 @@ export default function QuizModal({ quiz, subjectName, onClose, onComplete }) {
   const [score, setScore] = useState(0);
   const [quizFinished, setQuizFinished] = useState(false);
 
-  const currentQ = quiz.questions[currentIndex];
-  const totalQ = quiz.questions.length;
+  const currentQ = quiz?.questions?.[currentIndex] || {};
+  const totalQ = quiz?.questions?.length || 0;
+
+  const getQuestionText = (q) => q?.questionEn || q?.question || 'Question';
+  const getCorrectIndex = (q) => (q?.correct !== undefined ? q.correct : (q?.correctIndex !== undefined ? q.correctIndex : 0));
+  const optionsList = Array.isArray(currentQ?.options) ? currentQ.options : [];
 
   const handleSelectOption = (idx) => {
     if (isAnswered) return;
     setSelectedOption(idx);
     setIsAnswered(true);
 
-    const isCorrect = idx === currentQ.correct;
+    const isCorrect = idx === getCorrectIndex(currentQ);
     if (isCorrect) {
       setScore(s => s + 1);
     }
@@ -138,7 +142,7 @@ export default function QuizModal({ quiz, subjectName, onClose, onComplete }) {
             {/* Question Text */}
             <div style={{ marginBottom: '20px' }}>
               <p style={{ fontSize: '1.15rem', fontWeight: 600, color: '#ffffff', marginBottom: '6px' }}>
-                {currentQ.questionEn}
+                {getQuestionText(currentQ)}
               </p>
               {subjectName?.toLowerCase().includes('urdu') && currentQ.questionUrdu && (
                 <p className="urdu-text" style={{ fontSize: '1.05rem', color: 'var(--accent-lavender)' }}>
@@ -149,13 +153,14 @@ export default function QuizModal({ quiz, subjectName, onClose, onComplete }) {
 
             {/* Options */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '20px' }}>
-              {currentQ.options.map((option, idx) => {
+              {optionsList.map((option, idx) => {
                 let border = '1px solid var(--border-subtle)';
                 let bg = 'var(--bg-glass)';
                 let textColor = 'var(--text-main)';
+                const correctIdx = getCorrectIndex(currentQ);
 
                 if (isAnswered) {
-                  if (idx === currentQ.correct) {
+                  if (idx === correctIdx) {
                     border = '1px solid #10b981';
                     bg = 'rgba(16, 185, 129, 0.18)';
                     textColor = '#a7f3d0';
@@ -188,10 +193,10 @@ export default function QuizModal({ quiz, subjectName, onClose, onComplete }) {
                     }}
                   >
                     <span>{option}</span>
-                    {isAnswered && idx === currentQ.correct && (
+                    {isAnswered && idx === correctIdx && (
                       <CheckCircle2 size={18} color="#10b981" />
                     )}
-                    {isAnswered && idx === selectedOption && idx !== currentQ.correct && (
+                    {isAnswered && idx === selectedOption && idx !== correctIdx && (
                       <XCircle size={18} color="#f43f5e" />
                     )}
                   </button>

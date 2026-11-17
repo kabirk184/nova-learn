@@ -124,7 +124,7 @@ export const unlockBadge = (badge) => {
   return true;
 };
 
-import { recordValidatedActivity } from '../services/studentService';
+import { recordValidatedActivity } from '../services/studentService.js';
 
 export const completeDailyChallenge = (challengeId) => {
   const current = getProgress();

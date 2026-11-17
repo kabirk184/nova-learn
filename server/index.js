@@ -29,7 +29,8 @@ function loadEnv() {
 
 loadEnv();
 
-const PORT = process.env.PORT || 3001;
+const PORT = parseInt(process.env.PORT, 10) || 3001;
+const HOST = process.env.HOST || '0.0.0.0';
 
 // ==============================================================================
 // RATE LIMITING & SECURITY CONFIGURATION (School Wi-Fi & 60 Students Aware)
@@ -44,6 +45,7 @@ const MAX_GLOBAL_REQUESTS_PER_MINUTE = 28;
 const studentRequestHistory = new Map();
 const ipRequestHistory = new Map();
 const globalRequestTimestamps = [];
+const inFlightStudents = new Set();
 
 setInterval(() => {
   const now = Date.now();
@@ -123,17 +125,47 @@ function checkRateLimits(clientIp, studentSessionId) {
     };
   }
 
-  studentHistory.push(now);
-  studentRequestHistory.set(studentKey, studentHistory);
-  ipHistory.push(now);
-  ipRequestHistory.set(clientIp, ipHistory);
-  globalRequestTimestamps.push(now);
-
-  return { allowed: true };
+  return { allowed: true, studentKey, clientIp };
 }
 
-function setSecurityHeaders(res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+function commitRateLimits(clientIp, studentKey) {
+  const now = Date.now();
+  let studentHistory = studentRequestHistory.get(studentKey) || [];
+  studentHistory.push(now);
+  studentRequestHistory.set(studentKey, studentHistory);
+
+  let ipHistory = ipRequestHistory.get(clientIp) || [];
+  ipHistory.push(now);
+  ipRequestHistory.set(clientIp, ipHistory);
+
+  globalRequestTimestamps.push(now);
+}
+
+function setSecurityHeaders(req, res) {
+  const origin = req ? req.headers['origin'] : null;
+  const configuredOrigins = process.env.ALLOWED_ORIGINS 
+    ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim()).filter(Boolean)
+    : [];
+
+  let matchedOrigin = null;
+
+  if (origin) {
+    if (configuredOrigins.includes(origin)) {
+      matchedOrigin = origin;
+    } else if (origin.endsWith('.vercel.app') || origin.includes('localhost') || origin.includes('127.0.0.1')) {
+      // Safe preview/production matching for Vercel apps & local test environments
+      matchedOrigin = origin;
+    }
+  }
+
+  if (matchedOrigin) {
+    res.setHeader('Access-Control-Allow-Origin', matchedOrigin);
+    res.setHeader('Vary', 'Origin');
+  } else if (configuredOrigins.length === 0) {
+    // Development fallback if no specific origin is specified and request is direct
+    res.setHeader('Access-Control-Allow-Origin', '*');
+  }
+
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Student-Session-Id, X-Student-Token');
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -163,7 +195,7 @@ function parseJsonBody(req, maxBytes = 64 * 1024) {
 }
 
 const server = http.createServer(async (req, res) => {
-  setSecurityHeaders(res);
+  setSecurityHeaders(req, res);
 
   if (req.method === 'OPTIONS') {
     res.writeHead(204);
@@ -298,6 +330,17 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    const studentLockKey = limitCheck.studentKey;
+    if (inFlightStudents.has(studentLockKey)) {
+      res.writeHead(429, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        error: 'Your previous question is still being answered. Please wait for the tutor to finish.',
+        isRateLimited: true,
+        retryAfter: 3
+      }));
+      return;
+    }
+
     try {
       const parsed = await parseJsonBody(req, 64 * 1024);
       loadEnv();
@@ -337,34 +380,43 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      const safeDepth = explanationDepth === 'simple' ? 'simple' : 'detailed';
-      const safeSubject = typeof currentSubject === 'string' ? currentSubject.slice(0, 80) : null;
+      // Input is validated — now acquire lock and commit rate limit quota
+      inFlightStudents.add(studentLockKey);
+      commitRateLimits(clientIp, studentLockKey);
 
-      const relevantLessons = findRelevantLessons(latestUserMsg, safeSubject, 3);
+      try {
+        const safeDepth = explanationDepth === 'simple' ? 'simple' : 'detailed';
+        const safeSubject = typeof currentSubject === 'string' ? currentSubject.slice(0, 80) : null;
 
-      const aiResult = await callAIModel({
-        messages,
-        explanationDepth: safeDepth,
-        relevantLessons,
-        currentSubject: safeSubject
-      });
+        const relevantLessons = findRelevantLessons(latestUserMsg, safeSubject, 3);
 
-      const suggestedFollowUps = relevantLessons.slice(0, 2).map(l => `Tell me more about ${l.title} in ${l.subject}`);
+        const aiResult = await callAIModel({
+          messages,
+          explanationDepth: safeDepth,
+          relevantLessons,
+          currentSubject: safeSubject
+        });
 
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({
-        response: aiResult.text,
-        provider: aiResult.provider,
-        usedFallback: aiResult.usedFallback,
-        relevantLessons: relevantLessons.map(l => ({
-          id: l.id,
-          title: l.title,
-          subject: l.subject,
-          summary: l.summaryEn || l.summary
-        })),
-        suggestedFollowUps
-      }));
+        const suggestedFollowUps = relevantLessons.slice(0, 2).map(l => `Tell me more about ${l.title} in ${l.subject}`);
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          response: aiResult.text,
+          provider: aiResult.provider,
+          usedFallback: aiResult.usedFallback,
+          relevantLessons: relevantLessons.map(l => ({
+            id: l.id,
+            title: l.title,
+            subject: l.subject,
+            summary: l.summaryEn || l.summary
+          })),
+          suggestedFollowUps
+        }));
+      } finally {
+        inFlightStudents.delete(studentLockKey);
+      }
     } catch (err) {
+      inFlightStudents.delete(studentLockKey);
       console.error('AI Tutor Handler Error:', err.message);
       const isConfigRequired = err.message.includes('CONFIG_REQUIRED');
       const isQuotaError = err.message.includes('QUOTA_EXHAUSTED') || 
@@ -397,6 +449,6 @@ const server = http.createServer(async (req, res) => {
   res.end(JSON.stringify({ error: 'Endpoint not found.' }));
 });
 
-server.listen(PORT, () => {
-  console.log(`Nova Learn AI Tutor backend listening on http://localhost:${PORT}`);
+server.listen(PORT, HOST, () => {
+  console.log(`Nova Learn AI Tutor backend listening on http://${HOST}:${PORT}`);
 });

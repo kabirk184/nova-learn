@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate, useLocation, Routes, Route, Navigate } from 'react-router-dom';
 import Navbar from './components/Navbar';
 import CosmosViewer from './components/CosmosViewer';
 import QuizModal from './components/QuizModal';
@@ -36,7 +37,39 @@ import StudentOnboardingModal from './components/StudentOnboardingModal';
 import { getStoredStudent, recordValidatedActivity } from './services/studentService';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState('home'); // Default to main hub!
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  // Map URL paths to legacy activeTab ids for Navbar highlighting
+  const pathToTab = {
+    '/': 'home',
+    '/subjects': 'subjects',
+    '/quiz-arena': 'arena',
+    '/study-prep': 'prep',
+    '/library': 'library',
+    '/tutor': 'tutor',
+    '/cosmos': 'cosmos',
+    '/leaderboard': 'leaderboard',
+    '/progress': 'progress',
+  };
+  const activeTab = pathToTab[location.pathname] || 'home';
+
+  // Helper: programmatic navigation using same old tab ids
+  const setActiveTab = (tabId) => {
+    const tabToPath = {
+      home: '/',
+      subjects: '/subjects',
+      arena: '/quiz-arena',
+      prep: '/study-prep',
+      library: '/library',
+      tutor: '/tutor',
+      cosmos: '/cosmos',
+      leaderboard: '/leaderboard',
+      progress: '/progress',
+    };
+    navigate(tabToPath[tabId] || '/');
+  };
+
   const [cosmosView, setCosmosView] = useState('portal'); // 'portal' | 'explorer'
   const [progress, setProgress] = useState(getProgress());
   const [activeSubject, setActiveSubject] = useState(subjectsData[0]);
@@ -164,11 +197,12 @@ export default function App() {
 
       {/* Main Content Viewport */}
       <main style={{ flex: 1, maxWidth: 'var(--max-width)', width: '100%', margin: '0 auto', padding: '32px 24px' }}>
+        <Routes>
 
         {/* =========================================================
-            TAB 1: UNIFIED CENTRAL HUB HOMEPAGE
+            ROUTE /: UNIFIED CENTRAL HUB HOMEPAGE
             ========================================================= */}
-        {activeTab === 'home' && (
+        <Route path="/" element={
           <div>
             {/* Hero Welcome Banner */}
             <div className="glass-panel responsive-hero-grid" style={{
@@ -354,12 +388,12 @@ export default function App() {
               </div>
             </div>
           </div>
-        )}
+        } />
 
         {/* =========================================================
-            TAB 2: COSMOS — IMMERSIVE SPACE & ASTRONOMY
+            ROUTE /cosmos: IMMERSIVE SPACE & ASTRONOMY
             ========================================================= */}
-        {activeTab === 'cosmos' && (
+        <Route path="/cosmos" element={
           <div style={{ margin: '-32px -24px', minHeight: '100vh', position: 'relative' }}>
             <CosmosHomepage
               onEnterCosmos={() => { }}
@@ -370,12 +404,12 @@ export default function App() {
               onLaunchQuiz={(quiz, name) => handleLaunchQuiz(quiz, name)}
             />
           </div>
-        )}
+        } />
 
         {/* =========================================================
-            TAB 3: ACADEMIC SUBJECTS & BILINGUAL LIBRARY
+            ROUTE /subjects: ACADEMIC SUBJECTS & BILINGUAL LIBRARY
             ========================================================= */}
-        {activeTab === 'subjects' && (
+        <Route path="/subjects" element={
           <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
               <div>
@@ -702,29 +736,29 @@ export default function App() {
               </div>
             </div>
           </div>
-        )}
+        } />
 
         {/* =========================================================
-            TAB 4: DEDICATED QUIZ ARENA
+            ROUTE /quiz-arena: DEDICATED QUIZ ARENA
             ========================================================= */}
-        {activeTab === 'arena' && (
+        <Route path="/quiz-arena" element={
           <QuizArena onNavigateBack={() => setActiveTab('home')} />
-        )}
+        } />
 
         {/* =========================================================
-            TAB 5: STUDY PREPARATION WORKSPACE
+            ROUTE /study-prep: STUDY PREPARATION WORKSPACE
             ========================================================= */}
-        {activeTab === 'prep' && (
+        <Route path="/study-prep" element={
           <StudyPrep
             onNavigateBack={() => setActiveTab('home')}
             onLaunchQuiz={(quiz, name) => handleLaunchQuiz(quiz, name)}
           />
-        )}
+        } />
 
         {/* =========================================================
-            TAB 6: TALEEM FOR ALL — KNOWLEDGE LIBRARY
+            ROUTE /library: TALEEM FOR ALL — KNOWLEDGE LIBRARY
             ========================================================= */}
-        {activeTab === 'library' && (
+        <Route path="/library" element={
           <TaleemLibrary
             onNavigateBack={() => setActiveTab('home')}
             onAskTutor={(topic, prompt) => {
@@ -733,41 +767,52 @@ export default function App() {
             }}
             onLaunchQuiz={(quiz, subjectName) => handleLaunchQuiz(quiz, subjectName)}
           />
-        )}
+        } />
 
         {/* =========================================================
-            TAB 7: AI STUDY TUTOR
+            ROUTE /tutor: AI STUDY TUTOR
             ========================================================= */}
-        {activeTab === 'tutor' && (
+        <Route path="/tutor" element={
           <TutorWorkspace
             onNavigateBack={() => setActiveTab('home')}
             initialTopic={tutorInquiry?.topic}
             initialPrompt={tutorInquiry?.prompt}
           />
-        )}
+        } />
 
         {/* =========================================================
-            TAB 8: MY PROGRESS & ACHIEVEMENTS
+            ROUTE /progress: MY PROGRESS & ACHIEVEMENTS
             ========================================================= */}
-        {activeTab === 'progress' && (
+        <Route path="/progress" element={
           <ProgressDashboard
             progress={progress}
             onNavigateBack={() => setActiveTab('home')}
             onLaunchArena={() => setActiveTab('arena')}
             onNavigateTab={(tab) => setActiveTab(tab)}
           />
-        )}
+        } />
 
         {/* =========================================================
-            TAB 9: GLOBAL STUDENT LEADERBOARD
+            ROUTE /leaderboard: GLOBAL STUDENT LEADERBOARD
             ========================================================= */}
-        {activeTab === 'leaderboard' && (
+        <Route path="/leaderboard" element={
           <GlobalLeaderboard
             onNavigateBack={() => setActiveTab('home')}
             onLaunchArena={() => setActiveTab('arena')}
             onOpenProfile={() => setShowProfile(true)}
           />
-        )}
+        } />
+
+        {/* 404 — Unknown route fallback */}
+        <Route path="*" element={
+          <div style={{ textAlign: 'center', padding: '60px 24px', color: '#ffffff' }}>
+            <h1 style={{ fontSize: '2.4rem', fontWeight: 900, color: '#f87171', marginBottom: '12px' }}>404</h1>
+            <p style={{ color: 'var(--text-muted)', marginBottom: '24px' }}>This page doesn't exist in Nova Learn.</p>
+            <button onClick={() => setActiveTab('home')} className="btn-primary">Return to Home Hub</button>
+          </div>
+        } />
+
+        </Routes>
       </main>
 
       {/* Floating Quiz Modal (Direct launcher from subject views) */}

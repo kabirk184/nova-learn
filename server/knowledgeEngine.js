@@ -42,46 +42,86 @@ const STOP_WORDS = new Set([
   'how', 'can', 'you', 'are', 'from', 'tell'
 ]);
 
+// Semantic synonyms and academic aliases mapping
+const CONCEPT_EXPANSIONS = {
+  'derivative': ['calculus', 'differential', 'rate of change'],
+  'derivatives': ['calculus', 'differential', 'rate of change'],
+  'integral': ['calculus', 'integration', 'area under curve'],
+  'integrals': ['calculus', 'integration', 'area under curve'],
+  'matrix': ['linear algebra', 'matrices', 'determinant', 'vector'],
+  'matrices': ['linear algebra', 'determinant', 'vector'],
+  'dna': ['genetics', 'molecular biology', 'rna', 'double helix'],
+  'rna': ['genetics', 'molecular biology', 'dna', 'transcription'],
+  'gravity': ['gravitational', 'newton', 'orbital', 'astronomy', 'physics'],
+  'planet': ['solar system', 'astronomy', 'orbit', 'celestial'],
+  'planets': ['solar system', 'astronomy', 'orbit', 'celestial'],
+  'black hole': ['singularity', 'event horizon', 'general relativity', 'space'],
+  'blackhole': ['singularity', 'event horizon', 'general relativity', 'space'],
+  'quantum': ['mechanics', 'wave function', 'schrodinger', 'heisenberg'],
+  'atom': ['atomic', 'electron', 'proton', 'neutron', 'chemistry'],
+  'criminology': ['crime', 'deviance', 'criminal justice', 'sociology'],
+  'freud': ['psychoanalysis', 'id', 'ego', 'superego', 'psychology'],
+  'ghazal': ['urdu poetry', 'radif', 'qafia', 'sher', 'mir', 'ghalib'],
+  'iqbal': ['allama', 'khudi', 'urdu poetry', 'philosophical'],
+  'algorithm': ['data structure', 'sorting', 'time complexity', 'big o', 'computer science'],
+  'neural': ['deep learning', 'machine learning', 'artificial intelligence', 'synapse']
+};
+
 /**
  * Enhanced semantic keyword scoring for lesson retrieval
  */
 export function findRelevantLessons(query, currentSubject = null, limit = 3) {
-  if (!query) return [];
+  if (!query || typeof query !== 'string') return [];
   
+  const queryLower = query.toLowerCase();
+
   // Clean tokens
-  const qTokens = query
-    .toLowerCase()
+  const rawTokens = queryLower
     .replace(/[^a-z0-9\s]/g, ' ')
     .split(/\s+/)
     .filter(w => w.length > 2 && !STOP_WORDS.has(w));
 
-  if (qTokens.length === 0) return [];
+  if (rawTokens.length === 0) return [];
+
+  // Expand with synonyms
+  const expandedTokens = new Set(rawTokens);
+  for (const token of rawTokens) {
+    if (CONCEPT_EXPANSIONS[token]) {
+      for (const syn of CONCEPT_EXPANSIONS[token]) {
+        for (const subSyn of syn.split(/\s+/)) {
+          if (!STOP_WORDS.has(subSyn) && subSyn.length > 2) {
+            expandedTokens.add(subSyn);
+          }
+        }
+      }
+    }
+  }
 
   const scored = allLessonModules.map(lesson => {
     let score = 0;
-    const titleLower = lesson.title.toLowerCase();
+    const titleLower = (lesson.title || '').toLowerCase();
     const contentLower = (lesson.contentEn || lesson.content || '').toLowerCase();
     const summaryLower = (lesson.summaryEn || lesson.summary || '').toLowerCase();
-    const subjectLower = lesson.subject.toLowerCase();
+    const subjectLower = (lesson.subject || '').toLowerCase();
 
     // Subject bias if provided
     if (currentSubject && subjectLower.includes(currentSubject.toLowerCase())) {
       score += 15;
     }
 
-    qTokens.forEach(token => {
-      // Exact word boundary matches in title
+    expandedTokens.forEach(token => {
+      // Primary keyword match in title
       if (titleLower.includes(token)) {
-        score += 20;
+        score += rawTokens.includes(token) ? 22 : 12;
       }
       if (summaryLower.includes(token)) {
-        score += 8;
+        score += rawTokens.includes(token) ? 9 : 5;
       }
       if (contentLower.includes(token)) {
-        score += 3;
+        score += rawTokens.includes(token) ? 3 : 1.5;
       }
       if (subjectLower.includes(token)) {
-        score += 6;
+        score += rawTokens.includes(token) ? 6 : 3;
       }
     });
 

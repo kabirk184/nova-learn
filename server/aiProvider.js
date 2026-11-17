@@ -45,7 +45,9 @@ function getPacificDate() {
 }
 
 // Persistent usage storage setup
-const DATA_DIR = path.resolve(process.cwd(), 'server', 'data');
+const DATA_DIR = process.env.DATA_DIR 
+  ? path.resolve(process.env.DATA_DIR) 
+  : path.resolve(process.cwd(), 'server', 'data');
 const USAGE_FILE = path.join(DATA_DIR, 'usageStats.json');
 
 function ensureDataDir() {
@@ -311,7 +313,10 @@ export async function callAIModel({ messages, explanationDepth = 'detailed', rel
   throw new Error('QUOTA_EXHAUSTED: All configured free AI quotas for the 60-student community have been utilized for today. Resets occur at 00:00 UTC (Groq) and Midnight PT (Gemini).');
 }
 
-async function callGemini(apiKey, messages, modelName = GEMINI_MODEL_PRIMARY) {
+async function callGemini(apiKey, messages, modelName = GEMINI_MODEL_PRIMARY, timeoutMs = 25000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
   const systemMsg = messages.find(m => m.role === 'system');
   const convo = messages.filter(m => m.role !== 'system');
 
@@ -336,11 +341,22 @@ async function callGemini(apiKey, messages, modelName = GEMINI_MODEL_PRIMARY) {
     };
   }
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  });
+  let response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: controller.signal
+    });
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      throw new Error(`Gemini request timed out after ${timeoutMs / 1000} seconds.`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 
   if (!response.ok) {
     const errorBody = await response.text();
@@ -364,20 +380,34 @@ async function callGemini(apiKey, messages, modelName = GEMINI_MODEL_PRIMARY) {
   return text;
 }
 
-async function callOpenAICompatible(endpoint, apiKey, model, messages) {
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`
-    },
-    body: JSON.stringify({
-      model,
-      messages,
-      temperature: 0.7,
-      max_tokens: 2048
-    })
-  });
+async function callOpenAICompatible(endpoint, apiKey, model, messages, timeoutMs = 25000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  let response;
+  try {
+    response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model,
+        messages,
+        temperature: 0.7,
+        max_tokens: 2048
+      }),
+      signal: controller.signal
+    });
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      throw new Error(`Groq request timed out after ${timeoutMs / 1000} seconds.`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 
   // Extract live rate limit headers from Groq
   const headerRemainingReqs = response.headers.get('x-ratelimit-remaining-requests');
@@ -401,7 +431,8 @@ async function callOpenAICompatible(endpoint, apiKey, model, messages) {
   }
 
   const data = await response.json();
-  const text = data.choices?.[0]?.message?.content || '';
+  const choice = data.choices?.[0];
+  const text = choice?.message?.content || choice?.message?.reasoning || '';
 
   if (!text) {
     throw new Error('Empty response received from AI model.');

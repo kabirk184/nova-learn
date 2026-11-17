@@ -8,7 +8,9 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 
-const DATA_DIR = path.resolve(process.cwd(), 'server', 'data');
+const DATA_DIR = process.env.DATA_DIR 
+  ? path.resolve(process.env.DATA_DIR) 
+  : path.resolve(process.cwd(), 'server', 'data');
 const DB_FILE = path.join(DATA_DIR, 'leaderboardDb.json');
 
 function ensureDataDir() {
@@ -87,9 +89,26 @@ class LeaderboardDatabase {
         updatedAt: new Date().toISOString(),
         students: Array.from(this.students.values())
       };
-      fs.writeFileSync(DB_FILE, JSON.stringify(payload, null, 2), 'utf8');
+      const tmpFile = `${DB_FILE}.tmp_${process.pid}_${Date.now()}`;
+      fs.writeFileSync(tmpFile, JSON.stringify(payload, null, 2), 'utf8');
+      
+      // On Windows (especially within OneDrive sync folders), atomic rename over an existing file
+      // can throw EPERM or EEXIST. We try renameSync first, and fallback to atomic overwrite.
+      try {
+        if (fs.existsSync(DB_FILE)) {
+          // If destination exists, fs.renameSync on Windows can fail if open or locked by indexing
+          fs.copyFileSync(tmpFile, DB_FILE);
+          try { fs.unlinkSync(tmpFile); } catch (_) {}
+        } else {
+          fs.renameSync(tmpFile, DB_FILE);
+        }
+      } catch (renameErr) {
+        // Safe fallback write directly if copy/rename was blocked
+        fs.writeFileSync(DB_FILE, JSON.stringify(payload, null, 2), 'utf8');
+        try { if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile); } catch (_) {}
+      }
     } catch (err) {
-      console.error('[Leaderboard DB] Failed to save DB file:', err.message);
+      console.error('[Leaderboard DB] Failed to save DB file safely:', err.message);
     }
   }
 

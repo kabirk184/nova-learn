@@ -118,13 +118,16 @@ export default function QuizArena({ onNavigateBack }) {
     }
   };
 
+  const getQuestionText = (q) => q?.questionEn || q?.question || 'Question';
+  const getCorrectIndex = (q) => (q?.correct !== undefined ? q.correct : (q?.correctIndex !== undefined ? q.correctIndex : 0));
+
   const finishQuiz = () => {
     setQuizState('results');
 
     // Calculate score
     let correctCount = 0;
     currentQuestions.forEach((q, idx) => {
-      if (userAnswers[idx] === q.correct) {
+      if (userAnswers[idx] === getCorrectIndex(q)) {
         correctCount += 1;
       }
     });
@@ -414,7 +417,7 @@ export default function QuizArena({ onNavigateBack }) {
           {/* Question Text */}
           <div style={{ marginBottom: '24px' }}>
             <h2 style={{ fontSize: '1.25rem', fontWeight: 600, color: '#ffffff', lineHeight: 1.5 }}>
-              {currentQ.questionEn}
+              {getQuestionText(currentQ)}
             </h2>
             {/* Show Urdu Question if Urdu subject is explicitly being tested */}
             {activeSubject.id === 'urdu' && currentQ.questionUrdu && (
@@ -426,14 +429,15 @@ export default function QuizArena({ onNavigateBack }) {
 
           {/* Options List */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '26px' }}>
-            {currentQ.options.map((opt, idx) => {
+            {(currentQ?.options || []).map((opt, idx) => {
               const isSelected = userAnswers[currentIndex] === idx;
+              const correctIdx = getCorrectIndex(currentQ);
               let bg = 'rgba(255, 255, 255, 0.03)';
               let border = '1px solid var(--border-subtle)';
               let color = 'var(--text-main)';
 
               if (isCurrentAnswered) {
-                if (idx === currentQ.correct) {
+                if (idx === correctIdx) {
                   bg = 'rgba(16, 185, 129, 0.2)';
                   border = '1px solid #10b981';
                   color = '#a7f3d0';
@@ -466,8 +470,8 @@ export default function QuizArena({ onNavigateBack }) {
                   }}
                 >
                   <span>{opt}</span>
-                  {isCurrentAnswered && idx === currentQ.correct && <CheckCircle2 size={18} color="#10b981" />}
-                  {isCurrentAnswered && isSelected && idx !== currentQ.correct && <XCircle size={18} color="#f43f5e" />}
+                  {isCurrentAnswered && idx === correctIdx && <CheckCircle2 size={18} color="#10b981" />}
+                  {isCurrentAnswered && isSelected && idx !== correctIdx && <XCircle size={18} color="#f43f5e" />}
                 </button>
               );
             })}
@@ -542,7 +546,7 @@ export default function QuizArena({ onNavigateBack }) {
             }}>
               <span style={{ fontSize: '0.8rem', color: 'var(--text-dim)', textTransform: 'uppercase' }}>Accuracy Score</span>
               <h3 style={{ fontSize: '2.2rem', fontWeight: 900, color: '#ffffff', marginTop: '4px' }}>
-                {Object.keys(userAnswers).filter(idx => userAnswers[idx] === currentQuestions[idx]?.correct).length} / {currentQuestions.length}
+                {Object.keys(userAnswers).filter(idx => userAnswers[idx] === getCorrectIndex(currentQuestions[idx])).length} / {currentQuestions.length}
               </h3>
             </div>
 

@@ -606,6 +606,11 @@ export default function TaleemLibrary({
                       <h4 style={{ fontSize: '1.08rem', fontWeight: 700, color: 'var(--accent-cyan)', marginBottom: '8px' }}>
                         {sec.heading}
                       </h4>
+                      {sec.urduHeading && (
+                        <h5 className="urdu-text" style={{ fontSize: '1rem', color: 'var(--accent-lavender)', marginBottom: '6px' }}>
+                          {sec.urduHeading}
+                        </h5>
+                      )}
                       <pre style={{
                         fontFamily: 'var(--font-sans)',
                         whiteSpace: 'pre-wrap',
@@ -617,8 +622,24 @@ export default function TaleemLibrary({
                         borderRadius: 'var(--radius-sm)',
                         border: '1px solid var(--border-subtle)'
                       }}>
-                        {sec.content}
+                        {sec.content || sec.bodyEn || (typeof sec === 'string' ? sec : '')}
                       </pre>
+                      {sec.bodyUrdu && (
+                        <pre className="urdu-text" style={{
+                          fontFamily: 'var(--font-urdu)',
+                          whiteSpace: 'pre-wrap',
+                          fontSize: '1.05rem',
+                          color: '#bae6fd',
+                          lineHeight: 2.2,
+                          background: 'rgba(139, 92, 246, 0.06)',
+                          padding: '16px',
+                          borderRadius: 'var(--radius-sm)',
+                          border: '1px solid var(--border-subtle)',
+                          marginTop: '10px'
+                        }}>
+                          {sec.bodyUrdu}
+                        </pre>
+                      )}
                     </div>
                   ))}
 
@@ -634,11 +655,42 @@ export default function TaleemLibrary({
                       <h4 style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--accent-cyan)', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
                         <Sparkles size={16} /> Real-World Case Studies & Practical Applications
                       </h4>
-                      <ul style={{ paddingLeft: '20px', margin: 0, color: '#f1f5f9', fontSize: '0.92rem', lineHeight: 1.7 }}>
-                        {activeTopic.studyNotes.practicalExamples.map((ex, i) => (
-                          <li key={i} style={{ marginBottom: '8px' }}>{ex}</li>
-                        ))}
-                      </ul>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                        {activeTopic.studyNotes.practicalExamples.map((ex, i) => {
+                          if (typeof ex === 'object' && ex !== null) {
+                            return (
+                              <div key={i} style={{
+                                background: 'rgba(255, 255, 255, 0.03)',
+                                border: '1px solid rgba(6, 182, 212, 0.2)',
+                                borderRadius: 'var(--radius-sm)',
+                                padding: '14px',
+                                color: '#f1f5f9'
+                              }}>
+                                {ex.scenario && (
+                                  <div style={{ fontWeight: 700, color: 'var(--accent-cyan)', fontSize: '0.94rem', marginBottom: '6px' }}>
+                                    📌 Scenario: {ex.scenario}
+                                  </div>
+                                )}
+                                {ex.solution && (
+                                  <div style={{ fontSize: '0.9rem', color: '#cbd5e1', lineHeight: 1.6 }}>
+                                    💡 Solution / Analysis: {ex.solution}
+                                  </div>
+                                )}
+                                {!ex.scenario && !ex.solution && (
+                                  <div style={{ fontSize: '0.9rem', color: '#cbd5e1' }}>
+                                    {JSON.stringify(ex)}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          }
+                          return (
+                            <div key={i} style={{ color: '#f1f5f9', fontSize: '0.92rem', lineHeight: 1.6 }}>
+                              • {ex}
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
                   )}
 

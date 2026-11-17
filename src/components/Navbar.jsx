@@ -1,14 +1,12 @@
 import React, { useState } from 'react';
-import { 
-  Sparkles, 
-  Orbit, 
-  BookOpen, 
-  Bot, 
-  Flame, 
-  Award, 
-  Languages, 
-  ChevronDown,
-  UserCheck,
+import { NavLink, useNavigate } from 'react-router-dom';
+import {
+  Sparkles,
+  Orbit,
+  BookOpen,
+  Bot,
+  Flame,
+  Award,
   CheckCircle2,
   FileText,
   Menu,
@@ -18,20 +16,21 @@ import {
 
 export default function Navbar({ activeTab, setActiveTab, progress, onOpenProfile }) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const navigate = useNavigate();
 
   const navLinks = [
-    { id: 'home', label: 'Home Hub', icon: Sparkles },
-    { id: 'subjects', label: 'Subjects', icon: BookOpen },
-    { id: 'arena', label: 'Quiz Arena', icon: Award },
-    { id: 'prep', label: 'Study Prep', icon: CheckCircle2 },
-    { id: 'library', label: 'Taleem Library', icon: FileText },
-    { id: 'tutor', label: 'Nova Tutor', icon: Bot, badge: 'AI Mode' },
-    { id: 'cosmos', label: 'Cosmos', icon: Orbit, badge: '3D Space' },
-    { id: 'leaderboard', label: 'Leaderboard', icon: Trophy }
+    { id: 'home',        label: 'Home Hub',       icon: Sparkles,     path: '/' },
+    { id: 'subjects',    label: 'Subjects',        icon: BookOpen,     path: '/subjects' },
+    { id: 'arena',       label: 'Quiz Arena',      icon: Award,        path: '/quiz-arena' },
+    { id: 'prep',        label: 'Study Prep',      icon: CheckCircle2, path: '/study-prep' },
+    { id: 'library',     label: 'Taleem Library',  icon: FileText,     path: '/library' },
+    { id: 'tutor',       label: 'Nova Tutor',      icon: Bot,          path: '/tutor',       badge: 'AI Mode' },
+    { id: 'cosmos',      label: 'Cosmos',          icon: Orbit,        path: '/cosmos',      badge: '3D Space' },
+    { id: 'leaderboard', label: 'Leaderboard',     icon: Trophy,       path: '/leaderboard' },
   ];
 
-  const handleNavClick = (id) => {
-    setActiveTab(id);
+  const handleNavClick = (path) => {
+    navigate(path);
     setMobileMenuOpen(false);
   };
 
@@ -53,7 +52,7 @@ export default function Navbar({ activeTab, setActiveTab, progress, onOpenProfil
       }}>
         {/* Brand Identity */}
         <div 
-          onClick={() => handleNavClick('home')}
+          onClick={() => handleNavClick('/')}
           style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', zIndex: 101 }}
         >
           <div style={{
@@ -80,16 +79,16 @@ export default function Navbar({ activeTab, setActiveTab, progress, onOpenProfil
           </div>
         </div>
 
-        {/* Desktop Navigation Links */}
+        {/* Desktop Navigation Links — NavLink for automatic active state */}
         <nav className="desktop-nav-links">
           {navLinks.map((link) => {
             const Icon = link.icon;
-            const isActive = activeTab === link.id;
             return (
-              <button
+              <NavLink
                 key={link.id}
-                onClick={() => handleNavClick(link.id)}
-                style={{
+                to={link.path}
+                end={link.path === '/'}
+                style={({ isActive }) => ({
                   display: 'flex',
                   alignItems: 'center',
                   gap: '6px',
@@ -102,8 +101,9 @@ export default function Navbar({ activeTab, setActiveTab, progress, onOpenProfil
                   fontSize: '0.88rem',
                   cursor: 'pointer',
                   transition: 'var(--transition-smooth)',
-                  minHeight: '40px'
-                }}
+                  minHeight: '40px',
+                  textDecoration: 'none',
+                })}
               >
                 <Icon size={16} />
                 <span>{link.label}</span>
@@ -119,7 +119,7 @@ export default function Navbar({ activeTab, setActiveTab, progress, onOpenProfil
                     {link.badge}
                   </span>
                 )}
-              </button>
+              </NavLink>
             );
           })}
         </nav>
@@ -203,7 +203,7 @@ export default function Navbar({ activeTab, setActiveTab, progress, onOpenProfil
             return (
               <button
                 key={link.id}
-                onClick={() => handleNavClick(link.id)}
+                onClick={() => handleNavClick(link.path)}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
@@ -214,7 +214,13 @@ export default function Navbar({ activeTab, setActiveTab, progress, onOpenProfil
                   color: isActive ? '#ffffff' : 'var(--text-muted)',
                   fontWeight: isActive ? 700 : 500,
                   cursor: 'pointer',
-                  minHeight: '48px'
+                  minHeight: '48px',
+                  outline: 'none',
+                  boxShadow: 'none',
+                  textDecoration: 'none',
+                  WebkitTapHighlightColor: 'transparent',
+                  appearance: 'none',
+                  WebkitAppearance: 'none',
                 }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>

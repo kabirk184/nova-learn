@@ -327,6 +327,22 @@ body {
     outline: none;
     text-decoration: none;
     -webkit-tap-highlight-color: transparent;
+    /* Root fix: browsers (esp. Android Chrome) add a focus indicator that
+       renders as a horizontal rule across button elements inside flex containers.
+       Explicitly resetting all border, outline, box-shadow and appearance
+       properties prevents the phantom line without hiding legitimate focus rings. */
+    box-shadow: none;
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    /* Ensure no inherited text-decoration underline from anchor-like parents */
+    text-decoration: none !important;
+  }
+
+  .mobile-nav-drawer button:focus,
+  .mobile-nav-drawer button:focus-visible {
+    outline: none;
+    box-shadow: none;
   }
 
   .mobile-nav-drawer button::before,
